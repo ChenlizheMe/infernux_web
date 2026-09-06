@@ -64,7 +64,7 @@ README.md
 README.zh-CN.md
 ```
 
-Run `python package.py dist/infernux.platform-web.inxpkg` to package locally. This standalone script uses only Python's standard library and does not import Infernux. Build outside package/, then place the files to ship inside package/ before packaging.
+Run `python package.py dist/infernux.platform-web.inxpkg` to package locally. This standalone script uses only Python's standard library and does not require an engine installation. Build outside package/, then place the files to ship inside package/ before packaging.
 
 Maintainers run `python release.py v0.1.0` to create the archive and its release manifest. Pushing a matching version tag publishes both files through GitHub Actions. The editor uses that manifest to select a compatible release.
 
