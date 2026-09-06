@@ -1,0 +1,5 @@
+/dist/
+*.inxpkg
+__pycache__/
+*.py[cod]
+.pytest_cache/

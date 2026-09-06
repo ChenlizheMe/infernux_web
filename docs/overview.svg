@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="640" viewBox="0 0 1440 640">
+<rect width="1440" height="640" rx="24" fill="#101620"/>
+<g font-family="Segoe UI,Arial,sans-serif">
+<text x="64" y="72" fill="#bc9bff" font-size="20" letter-spacing="5">INFERNUX / PLATFORM PACKAGES</text>
+<text x="64" y="150" fill="#f3f6fb" font-size="52" font-weight="700">Web builds, owned by a plugin.</text>
+<text x="64" y="201" fill="#b1bdce" font-size="23">BUILD WORKFLOW · ENGINE 0.4.0 · PLUGIN 0.1.0</text>
+<g fill="#1b2533" stroke="#344255" stroke-width="2">
+<rect x="64" y="265" width="368" height="170" rx="18"/>
+<rect x="536" y="265" width="368" height="170" rx="18"/>
+<rect x="1008" y="265" width="368" height="170" rx="18"/>
+</g>
+<g fill="#bc9bff" font-size="16" letter-spacing="2">
+<text x="88" y="302">01 / AUTHOR</text><text x="560" y="302">02 / EXPORT</text><text x="1032" y="302">03 / PLAY</text>
+</g>
+<g fill="#f3f6fb" font-size="27" font-weight="600">
+<text x="88" y="353">Editor + project</text><text x="560" y="353">Web platform</text><text x="1032" y="353">Browser Player</text>
+</g>
+<g fill="#b1bdce" font-size="19">
+<text x="88" y="399">Linux or Windows + WSL2</text><text x="560" y="399">Target + build integration</text><text x="1032" y="399">WebAssembly / WebGPU</text>
+</g>
+<g stroke="#bc9bff" stroke-width="3" fill="none"><path d="M454 350h58m-12-10 12 10-12 10"/><path d="M926 350h58m-12-10 12 10-12 10"/></g>
+<path d="M64 485h1312" stroke="#344255"/>
+<text x="64" y="534" fill="#b1bdce" font-size="20">SHARED DEPENDENCIES</text>
+<text x="64" y="575" fill="#f3f6fb" font-size="22">Engine sources + pinned Linux / WSL toolchain</text>
+<text x="880" y="534" fill="#b1bdce" font-size="20">GAME OUTPUT</text>
+<text x="880" y="575" fill="#f3f6fb" font-size="22">HTML + JS + WASM + game data</text>
+</g></svg>
