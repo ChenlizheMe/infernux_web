@@ -35,6 +35,8 @@
 #include <emscripten.h>
 #include <emscripten/html5.h>
 
+// JavaScript bodies are not C++: clang-format splits strict equality tokens.
+// clang-format off
 EM_JS(double, InfernuxWebAcceptanceFixedDelta, (), {
     const clock = Module.infernuxAcceptanceClock;
     return clock && clock.enabled ? Number(clock.fixedDeltaSeconds) : 0.0;
@@ -45,15 +47,17 @@ EM_JS(double, InfernuxWebAcceptancePauseFrame, (), {
     return clock && clock.enabled ? Number(clock.pauseAfterFrame) : 0.0;
 });
 
-EM_JS(int, InfernuxWebForceFallbackAdapter, (),
-      { return new URLSearchParams(globalThis.location.search).get("infernuxWebGpuAdapter") == = "fallback" ? 1 : 0; });
+EM_JS(int, InfernuxWebForceFallbackAdapter, (), {
+    return new URLSearchParams(globalThis.location.search).get("infernuxWebGpuAdapter") === "fallback" ? 1 : 0;
+});
 
 EM_JS(int, InfernuxWebFixedCanvasWidth, (), {
     const presentation = Module.infernuxPresentation;
-    return presentation.mode == = "windowed" ? presentation.width : 0;
+    return presentation.mode === "windowed" ? presentation.width : 0;
 });
 
 EM_JS(int, InfernuxWebFixedCanvasHeight, (), { return Module.infernuxPresentation.height; });
+// clang-format on
 
 #if defined(INFERNUX_WEB_ENGINE_RUNTIME)
 PyMODINIT_FUNC PyInit__Infernux();
