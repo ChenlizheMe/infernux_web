@@ -5,13 +5,127 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  package:
-    runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m unittest discover -s tests -v
+
+  runtime:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' || github.ref_type == 'tag'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ChenlizheMe/Infernux
+          ref: 040/multiplatform_build
+          submodules: recursive
+          path: engine
+      - uses: actions/checkout@v4
+        with:
+          path: engine/external/plugins/infernux_web
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: infernux
+          python-version: '3.13'
+          auto-activate-base: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            engine/out/toolchains/web
+            engine/out/build/web-precompiled-player
+          key: web-runtime-${{ runner.os }}-${{ hashFiles('engine/scripts/setup/build_web_toolchain.sh', 'engine/external/plugins/infernux_web/native/**') }}
+          restore-keys: web-runtime-${{ runner.os }}-
+      - name: Prepare release-engineering tools
+        run: |
+          conda activate infernux
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ninja-build pkg-config libssl-dev libffi-dev zlib1g-dev libbz2-dev libsqlite3-dev liblzma-dev glslang-tools
+          python -m pip install cmake pybind11
+          engine/scripts/setup/build_web_toolchain.sh "$PWD/engine/out/toolchains/web"
+      - name: Publish precompiled browser runtime directly into the plugin
+        run: |
+          conda activate infernux
+          source engine/out/toolchains/web/emsdk/emsdk_env.sh
+          python engine/external/plugins/infernux_web/native/build.py \
+            --emsdk engine/out/toolchains/web/emsdk \
+            --cpython-source engine/out/toolchains/web/src/Python-3.13.15 \
+            --build-root engine/out/build/web-precompiled-player
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-player
+          path: engine/external/plugins/infernux_web/package/editor/infernux_web/player/
+          if-no-files-found: error
+
+  shader-tools:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' || github.ref_type == 'tag'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ChenlizheMe/Infernux
+          ref: 040/multiplatform_build
+          submodules: recursive
+          path: engine
+      - uses: actions/checkout@v4
+        with:
+          path: engine/external/plugins/infernux_web
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: infernux
+          python-version: '3.13'
+          auto-activate-base: false
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            engine/out/toolchains/dawn
+            engine/out/build/web-shader-tools
+          key: web-tools-${{ runner.os }}-${{ hashFiles('engine/external/plugins/infernux_web/native/tools/**', 'engine/external/plugins/infernux_web/native/prepare_dawn.py') }}
+          restore-keys: web-tools-${{ runner.os }}-
+      - name: Build and publish native shader tools
+        run: |
+          conda activate infernux
+          python -m pip install cmake ninja
+          python engine/external/plugins/infernux_web/native/prepare_dawn.py engine/out/toolchains/dawn
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake -S engine/external/plugins/infernux_web/native/tools -B engine/out/build/web-shader-tools -G Ninja "-DINFERNUX_DAWN_SOURCE=$PWD/engine/out/toolchains/dawn"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build engine/out/build/web-shader-tools --target prebuild_web_tools --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-tools-${{ runner.os }}
+          path: engine/external/plugins/infernux_web/package/editor/infernux_web/tools/
+          if-no-files-found: error
+
+  release:
+    needs: [runtime, shader-tools]
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
@@ -19,18 +133,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Test standalone packaging
-        run: python -m unittest discover -s tests -v
-      - name: Build release files
-        env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          tag="$(python -c 'import json; print("v" + json.load(open("package/inx_package.json"))["version"])')"
-          if [ "$REF_TYPE" = tag ]; then
-            tag="$REF_NAME"
-          fi
-          python release.py "$tag"
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-player
+          path: package/editor/infernux_web/player
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: web-tools-*
+          merge-multiple: true
+          path: package/editor/infernux_web/tools
+      - name: Build the complete InxPackage
+        run: python release.py v0.2.0
       - uses: actions/upload-artifact@v4
         with:
           name: plugin-package

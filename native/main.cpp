@@ -8,6 +8,7 @@
 #include <core/threading/JobSystem.h>
 #include <function/audio/AudioEngine.h>
 #include <function/renderer/FullscreenRenderer.h>
+#include <platform/filesystem/InxPack.h>
 #include <platform/input/InputManager.h>
 #if defined(INFERNUX_WEB_ENGINE_RUNTIME)
 #include <function/scene/SceneManager.h>
@@ -44,9 +45,15 @@ EM_JS(double, InfernuxWebAcceptancePauseFrame, (), {
     return clock && clock.enabled ? Number(clock.pauseAfterFrame) : 0.0;
 });
 
-EM_JS(int, InfernuxWebForceFallbackAdapter, (), {
-    return new URLSearchParams(globalThis.location.search).get("infernuxWebGpuAdapter") === "fallback" ? 1 : 0;
+EM_JS(int, InfernuxWebForceFallbackAdapter, (),
+      { return new URLSearchParams(globalThis.location.search).get("infernuxWebGpuAdapter") == = "fallback" ? 1 : 0; });
+
+EM_JS(int, InfernuxWebFixedCanvasWidth, (), {
+    const presentation = Module.infernuxPresentation;
+    return presentation.mode == = "windowed" ? presentation.width : 0;
 });
+
+EM_JS(int, InfernuxWebFixedCanvasHeight, (), { return Module.infernuxPresentation.height; });
 
 #if defined(INFERNUX_WEB_ENGINE_RUNTIME)
 PyMODINIT_FUNC PyInit__Infernux();
@@ -416,15 +423,13 @@ void ResizeCanvas()
     emscripten_get_element_css_size("#canvas", &cssWidth, &cssHeight);
     g_cssWidth = std::max(1.0, cssWidth);
     g_cssHeight = std::max(1.0, cssHeight);
-#if INFERNUX_WEB_FIXED_CANVAS
-    g_width = static_cast<uint32_t>(INFERNUX_WEB_CANVAS_WIDTH);
-    g_height = static_cast<uint32_t>(INFERNUX_WEB_CANVAS_HEIGHT);
-    const double scale = static_cast<double>(g_width) / g_cssWidth;
-#else
-    const double scale = std::max(1.0, emscripten_get_device_pixel_ratio());
-    g_width = std::max(1u, static_cast<uint32_t>(cssWidth * scale));
-    g_height = std::max(1u, static_cast<uint32_t>(cssHeight * scale));
-#endif
+    const int fixedWidth = InfernuxWebFixedCanvasWidth();
+    const double scale = fixedWidth > 0 ? static_cast<double>(fixedWidth) / g_cssWidth
+                                        : std::max(1.0, emscripten_get_device_pixel_ratio());
+    g_width =
+        fixedWidth > 0 ? static_cast<uint32_t>(fixedWidth) : std::max(1u, static_cast<uint32_t>(cssWidth * scale));
+    g_height = fixedWidth > 0 ? static_cast<uint32_t>(InfernuxWebFixedCanvasHeight())
+                              : std::max(1u, static_cast<uint32_t>(cssHeight * scale));
     emscripten_set_canvas_element_size("#canvas", g_width, g_height);
 
     if (g_surface && g_device) {
@@ -1109,6 +1114,13 @@ void StartSurface()
 int main()
 {
     std::printf("INFERNUX_WEB_PLAYER_START\n");
+    try {
+        infernux::inxpack::Extract("/infernux-project.inxpkg", "/infernux/player");
+        std::remove("/infernux-project.inxpkg");
+    } catch (const std::exception &error) {
+        std::fprintf(stderr, "INFERNUX_WEB_CONTENT_LOAD_FAILED %s\n", error.what());
+        return 1;
+    }
     if (!InitializePython()) {
         std::fprintf(stderr, "INFERNUX_WEB_PYTHON_INITIALIZATION_FAILED\n");
         return 1;

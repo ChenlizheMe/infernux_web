@@ -10,58 +10,8 @@ set(INFERNUX_WEB_CPYTHON_SOURCE "" CACHE PATH
     "CPython 3.13 source directory")
 set(INFERNUX_WEB_CPYTHON_BUILD "" CACHE PATH
     "Configured CPython 3.13 emscripten-browser build directory")
-set(INFERNUX_ENGINE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../.." CACHE PATH
+set(INFERNUX_ENGINE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." CACHE PATH
     "Infernux source directory providing the backend-neutral RHI contract")
-set(INFERNUX_WEB_PLAYER_ASSETS "" CACHE PATH
-    "Optional cooked project and Python assets to preload into the Web host")
-set(INFERNUX_WEB_BRANDING_DIR "" CACHE PATH
-    "Generated project favicon, manifest, and browser branding")
-set(INFERNUX_WEB_SHELL_FILE "${CMAKE_CURRENT_SOURCE_DIR}/shell.html" CACHE FILEPATH
-    "HTML shell used to generate the Web Player entry point")
-set(INFERNUX_WEB_ASSET_REVISION "" CACHE STRING
-    "Deterministic identity shared by the Web Player JavaScript and data files")
-set(INFERNUX_WEB_DISPLAY_MODE "fullscreen_borderless" CACHE STRING
-    "Web Player presentation: fullscreen_borderless or windowed")
-set(INFERNUX_WEB_CANVAS_WIDTH "1280" CACHE STRING
-    "Fixed Web Player render width used by windowed presentation")
-set(INFERNUX_WEB_CANVAS_HEIGHT "720" CACHE STRING
-    "Fixed Web Player render height used by windowed presentation")
-string(LENGTH "${INFERNUX_WEB_ASSET_REVISION}" _web_asset_revision_length)
-if(NOT INFERNUX_WEB_ASSET_REVISION MATCHES "^[0-9a-f]+$" OR
-   NOT _web_asset_revision_length EQUAL 24)
-    message(FATAL_ERROR
-        "INFERNUX_WEB_ASSET_REVISION must be a 24-character lowercase SHA-256 prefix")
-endif()
-if(NOT INFERNUX_WEB_DISPLAY_MODE STREQUAL "fullscreen_borderless" AND
-   NOT INFERNUX_WEB_DISPLAY_MODE STREQUAL "windowed")
-    message(FATAL_ERROR
-        "INFERNUX_WEB_DISPLAY_MODE must be fullscreen_borderless or windowed")
-endif()
-foreach(_web_branding_file
-        infernux-favicon.png
-        infernux-icon-192.png
-        infernux-icon-512.png
-        infernux.webmanifest
-        infernux-branding.js)
-    if(NOT EXISTS "${INFERNUX_WEB_BRANDING_DIR}/${_web_branding_file}")
-        message(FATAL_ERROR
-            "INFERNUX_WEB_BRANDING_DIR is missing ${_web_branding_file}")
-    endif()
-endforeach()
-set(_web_capability_inventory
-    "${INFERNUX_WEB_PLAYER_ASSETS}/infernux-webgpu-capabilities.json")
-if(NOT EXISTS "${_web_capability_inventory}")
-    message(FATAL_ERROR
-        "Web Player assets are missing infernux-webgpu-capabilities.json")
-endif()
-foreach(_web_canvas_extent INFERNUX_WEB_CANVAS_WIDTH INFERNUX_WEB_CANVAS_HEIGHT)
-    if(NOT "${${_web_canvas_extent}}" MATCHES "^[1-9][0-9]*$")
-        message(FATAL_ERROR "${_web_canvas_extent} must be a positive integer")
-    endif()
-endforeach()
-if(NOT EXISTS "${INFERNUX_WEB_SHELL_FILE}")
-    message(FATAL_ERROR "INFERNUX_WEB_SHELL_FILE must name an existing file")
-endif()
 option(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE
     "Compile the existing Infernux Python binding surface for wasm without linking it"
     OFF
@@ -72,7 +22,7 @@ option(INFERNUX_WEB_LINK_NATIVE_MODULE_PROBE
 )
 option(INFERNUX_WEB_LINK_ENGINE_RUNTIME
     "Statically link the supported Infernux gameplay runtime into the Web Player"
-    OFF
+    ON
 )
 if(INFERNUX_WEB_LINK_NATIVE_MODULE_PROBE AND
    NOT INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE)
@@ -195,39 +145,11 @@ add_executable(InfernuxWebPlayerHost
 set_target_properties(InfernuxWebPlayerHost PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
-    OUTPUT_NAME "infernux-player"
-    SUFFIX ".html"
+    OUTPUT_NAME "infernux-runtime"
+    SUFFIX ".js"
 )
 set_property(TARGET InfernuxWebPlayerHost APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/bootstrap.py"
-    "${INFERNUX_WEB_SHELL_FILE}"
-)
-configure_file(
-    "${INFERNUX_WEB_SHELL_FILE}"
-    "${CMAKE_CURRENT_BINARY_DIR}/shell.generated.html"
-    @ONLY
-)
-configure_file(
-    "${INFERNUX_ENGINE_SOURCE_ROOT}/docs/assets/logo.png"
-    "${CMAKE_CURRENT_BINARY_DIR}/infernux-logo.png"
-    COPYONLY
-)
-foreach(_web_branding_file
-        infernux-favicon.png
-        infernux-icon-192.png
-        infernux-icon-512.png
-        infernux.webmanifest
-        infernux-branding.js)
-    configure_file(
-        "${INFERNUX_WEB_BRANDING_DIR}/${_web_branding_file}"
-        "${CMAKE_CURRENT_BINARY_DIR}/${_web_branding_file}"
-        COPYONLY
-    )
-endforeach()
-configure_file(
-    "${_web_capability_inventory}"
-    "${CMAKE_CURRENT_BINARY_DIR}/infernux-webgpu-capabilities.json"
-    COPYONLY
 )
 
 target_include_directories(InfernuxWebPlayerHost PRIVATE
@@ -268,20 +190,6 @@ target_compile_definitions(InfernuxWebPlayerHost PRIVATE
     INFERNUX_SINGLE_THREADED_RUNTIME=1
     INFERNUX_WEBGPU_RUNTIME=1
 )
-if(INFERNUX_WEB_DISPLAY_MODE STREQUAL "windowed")
-    target_compile_definitions(InfernuxWebPlayerHost PRIVATE
-        INFERNUX_WEB_FIXED_CANVAS=1
-        INFERNUX_WEB_CANVAS_WIDTH=${INFERNUX_WEB_CANVAS_WIDTH}
-        INFERNUX_WEB_CANVAS_HEIGHT=${INFERNUX_WEB_CANVAS_HEIGHT}
-    )
-else()
-    target_compile_definitions(InfernuxWebPlayerHost PRIVATE
-        INFERNUX_WEB_FIXED_CANVAS=0
-        INFERNUX_WEB_CANVAS_WIDTH=${INFERNUX_WEB_CANVAS_WIDTH}
-        INFERNUX_WEB_CANVAS_HEIGHT=${INFERNUX_WEB_CANVAS_HEIGHT}
-    )
-endif()
-
 if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
    INFERNUX_WEB_LINK_ENGINE_RUNTIME)
     execute_process(
@@ -466,31 +374,28 @@ target_link_options(InfernuxWebPlayerHost PRIVATE
     "-sFORCE_FILESYSTEM=1"
     "-sENVIRONMENT=web"
     "-sEXIT_RUNTIME=0"
-    "-sEXPORTED_RUNTIME_METHODS=['ccall']"
-    "--shell-file=${CMAKE_CURRENT_BINARY_DIR}/shell.generated.html"
+    "-sEXPORTED_RUNTIME_METHODS=['ccall','FS','addRunDependency','removeRunDependency','abort']"
     "--preload-file=${_python_assets}@/usr/local"
     "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/bootstrap.py@/infernux/bootstrap.py"
 )
-if(INFERNUX_WEB_PLAYER_ASSETS)
-    if(NOT IS_DIRECTORY "${INFERNUX_WEB_PLAYER_ASSETS}")
-        message(FATAL_ERROR
-            "INFERNUX_WEB_PLAYER_ASSETS must name an existing directory")
-    endif()
-    file(GLOB_RECURSE _web_player_asset_files CONFIGURE_DEPENDS
-        "${INFERNUX_WEB_PLAYER_ASSETS}/*"
-    )
-    set_property(TARGET InfernuxWebPlayerHost APPEND PROPERTY LINK_DEPENDS
-        ${_web_player_asset_files}
-    )
-    target_link_options(InfernuxWebPlayerHost PRIVATE
-        "--preload-file=${INFERNUX_WEB_PLAYER_ASSETS}@/infernux/player"
-    )
-endif()
 
-add_custom_command(TARGET InfernuxWebPlayerHost POST_BUILD
-    COMMAND "${CMAKE_COMMAND}"
-        "-DINFERNUX_WEB_HTML=$<TARGET_FILE:InfernuxWebPlayerHost>"
-        "-DINFERNUX_WEB_ASSET_REVISION=${INFERNUX_WEB_ASSET_REVISION}"
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/stamp_asset_revision.cmake"
+# CMake owns publication into this plugin. Project exports only consume these files.
+set(_web_player_destination "${CMAKE_CURRENT_SOURCE_DIR}/../package/editor/infernux_web/player")
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Player.inxmanifest" CONTENT
+"{\"$schema\":\"infernux.web_player\",\"engine\":\"0.4.0\",\"platform\":\"web\",\"architecture\":\"wasm32\",\"python_abi\":\"cp313\",\"configuration\":\"$<CONFIG>\"}\n")
+add_custom_target(prebuild_web_player
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${_web_player_destination}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE:InfernuxWebPlayerHost>"
+        "${CMAKE_CURRENT_BINARY_DIR}/infernux-runtime.wasm"
+        "${CMAKE_CURRENT_BINARY_DIR}/infernux-runtime.data"
+        "${CMAKE_CURRENT_BINARY_DIR}/Player.inxmanifest"
+        "${_web_player_destination}"
+    DEPENDS InfernuxWebPlayerHost
+    VERBATIM
+)
+add_custom_target(package_web_plugin
+    COMMAND python "${CMAKE_CURRENT_SOURCE_DIR}/../release.py" v0.2.0
+    DEPENDS prebuild_web_player
     VERBATIM
 )

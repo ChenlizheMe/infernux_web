@@ -9,9 +9,7 @@ import json
 import os
 import py_compile
 import re
-import shlex
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -29,7 +27,6 @@ from Infernux.engine.build import (
     PlatformCapabilities,
     PlatformExporter,
 )
-from Infernux.engine.build.source_library import GitSource, acquire_git_source
 
 from .doctor import inspect_web_toolchain
 from .capabilities import (
@@ -73,12 +70,6 @@ _WEB_SHELL_REQUIRED_MARKERS = (
     "@INFERNUX_WEB_CANVAS_WIDTH@",
     "@INFERNUX_WEB_CANVAS_HEIGHT@",
 )
-_WEB_ZSTD_SOURCE = GitSource(
-    "zstd",
-    "https://github.com/facebook/zstd.git",
-    "794ea1b0afca0f020f4e57b6732332231fb23c70",
-    ("build/cmake/CMakeLists.txt", "lib/zstd.h"),
-)
 
 
 class WebPlatformExporter(PlatformExporter):
@@ -111,8 +102,7 @@ class WebPlatformExporter(PlatformExporter):
                     "compile",
                 ),
                 BuildStep("imports", "Analyze browser Python imports", "analyze"),
-                BuildStep("runtime", "Link CPython 3.13 and Infernux wasm runtime", "compile"),
-                BuildStep("webgpu", "Link WebGPU browser host", "compile"),
+                BuildStep("runtime", "Stage precompiled WebGPU and CPython runtime", "package"),
                 BuildStep(
                     "package",
                     "Publish HTML, JavaScript, WebAssembly, and content",
@@ -140,22 +130,9 @@ class WebPlatformExporter(PlatformExporter):
                 elapsed_seconds=time.perf_counter() - started,
             )
         details = dict(report.details)
-        source_root = Path(str(details.get("source_root", ""))).resolve()
-        if not (source_root / "CMakeLists.txt").is_file():
-            return BuildResult(
-                request.target,
-                False,
-                diagnostics=(
-                    BuildDiagnostic(
-                        DiagnosticSeverity.ERROR,
-                        "web.source.checkout",
-                        "The Web build has no valid Infernux source checkout.",
-                        source=self.exporter_id,
-                    ),
-                ),
-                manifest={"toolchain": details},
-                elapsed_seconds=time.perf_counter() - started,
-            )
+        import Infernux
+
+        source_package = Path(Infernux.__file__).resolve().parent
         staging = _web_staging_directory(request)
         logs: tuple[str, ...] = ()
         try:
@@ -179,16 +156,16 @@ class WebPlatformExporter(PlatformExporter):
             request.report("prepare", 0, 1, "Preparing Web Player staging")
             _prepare_web_staging(staging)
             game_name, player_assets = _cook_web_player_assets(request, staging)
-            _stage_web_branding(player_assets, source_root, game_name)
-            _stage_engine_python_package(request, player_assets, source_root)
-            _stage_web_shader_sources(request, staging, player_assets, source_root)
+            _stage_web_branding(player_assets, source_package, game_name)
+            _stage_engine_python_package(request, player_assets, source_package)
+            _stage_web_shader_sources(request, staging, player_assets, source_package)
             capability_inventory = _stage_webgpu_capability_inventory(player_assets)
-            logs = _configure_and_build_host(
+            logs = _assemble_web_host(
                 request,
                 staging,
                 player_assets,
                 details,
-                source_root,
+                source_package,
                 presentation,
                 web_shell,
                 project_web_template,
@@ -299,6 +276,7 @@ def _publish_web_player(
         f"infernux-player.{revision}.js",
         f"infernux-player.{revision}.wasm",
         f"infernux-player.{revision}.data",
+        f"infernux-player.{revision}.inxpkg",
         "infernux-logo.png",
         "infernux-favicon.png",
         "infernux-icon-192.png",
@@ -328,7 +306,7 @@ def _publish_web_player(
     if names[1] not in html:
         raise RuntimeError(f"Web host entry point does not reference {names[1]}")
     for suffix in ("wasm", "data"):
-        logical_name = f"infernux-player.{suffix}"
+        logical_name = f"infernux-runtime.{suffix}"
         versioned_expression = f"infernux-player.${{assetRevision}}.{suffix}"
         if logical_name not in html or versioned_expression not in html:
             raise RuntimeError(
@@ -441,10 +419,10 @@ def _stage_webgpu_capability_inventory(
 
 
 def _prepare_web_staging(staging: Path) -> None:
-    """Refresh volatile cook inputs without discarding the native build cache."""
+    """Refresh generated project content and assembly output."""
 
     staging.mkdir(parents=True, exist_ok=True)
-    for name in (".infernux-player-cook", "player-assets", "shader-cook"):
+    for name in (".infernux-player-cook", "player-assets", "shader-cook", "host-build"):
         shutil.rmtree(staging / name, ignore_errors=True)
 
 
@@ -492,7 +470,7 @@ def _cook_web_player_assets(
 
 def _stage_web_branding(
     player_assets: Path,
-    source_root: Path,
+    source_package: Path,
     game_name: str,
 ) -> Path:
     """Create browser metadata from the shared cooked Player branding."""
@@ -505,9 +483,7 @@ def _stage_web_branding(
     source_icon = read_cooked_player_icon(
         data_roots[0],
         default_icon=(
-            source_root
-            / "python"
-            / "Infernux"
+            source_package
             / "resources"
             / "icons"
             / "icon.png"
@@ -588,9 +564,8 @@ def _stage_web_branding(
 def _stage_engine_python_package(
     request: BuildRequest,
     player_assets: Path,
-    source_root: Path,
+    source_package: Path,
 ) -> None:
-    source_package = source_root / "python" / "Infernux"
     if not (source_package / "engine" / "platform_player_bootstrap.py").is_file():
         raise ValueError(f"Infernux Player Python sources are incomplete: {source_package}")
     site_packages = player_assets / "python" / "site-packages"
@@ -618,7 +593,7 @@ def _stage_engine_python_package(
             "test",
         ),
     )
-    public_api = source_root / "python" / "infernux.py"
+    public_api = source_package.parent / "infernux.py"
     if not public_api.is_file():
         raise ValueError(f"Infernux public Python API is missing: {public_api}")
     shutil.copy2(public_api, site_packages / public_api.name)
@@ -653,16 +628,14 @@ def _stage_web_shader_sources(
     request: BuildRequest,
     staging: Path,
     player_assets: Path,
-    source_root: Path,
+    source_package: Path,
 ) -> None:
     """Generate the shared renderer's GLSL inputs before WGSL translation."""
 
     from Infernux.lib import _Infernux as native
 
     vertex_path = (
-        source_root
-        / "python"
-        / "Infernux"
+        source_package
         / "resources"
         / "shaders"
         / "fullscreen_triangle.vert"
@@ -854,152 +827,83 @@ void main() {
     request.report("shaders", 1, 2, "Shared fullscreen GLSL prepared")
 
 
-def _configure_and_build_host(
+def _assemble_web_host(
     request: BuildRequest,
     staging: Path,
     player_assets: Path,
     details: dict[str, object],
-    source_root: Path,
+    source_package: Path,
     presentation: dict[str, object],
     web_shell: Path,
     project_web_template: Path | None,
 ) -> tuple[str, ...]:
-    distribution = str(details.get("distribution", "Ubuntu-22.04"))
-    host_template_source = Path(__file__).resolve().parent / "templates" / "host"
-    build_root = staging / "host-build"
-    shader_pipeline = (
-        Path(__file__).resolve().parent / "shader_pipeline.py"
-    )
-    if os.name == "nt":
-        def build_path(path: Path) -> str:
-            return _wsl_path(path, distribution)
+    """Assemble project content around the plugin's immutable native payload."""
+    from Infernux.engine.player_package_native import write_pack
+    from .shader_pipeline import compile_shader_manifest
 
-        python_command = "python"
-    else:
-        def build_path(path: Path) -> str:
-            return str(path.resolve())
-
-        python_command = sys.executable
-    tool_source_root = build_path(source_root)
-    tool_host_template_source = build_path(host_template_source)
-    tool_web_shell = build_path(web_shell)
-    tool_build_root = build_path(build_root)
-    _discard_mismatched_cmake_source(build_root, tool_host_template_source)
-    tool_player_assets = build_path(player_assets)
-    tool_branding = build_path(player_assets / "web-branding")
-    tool_shader_manifest = build_path(staging / "shader-cook" / "manifest.json")
-    tool_shader_output = build_path(player_assets / "web-shaders")
-    tool_shader_pipeline = build_path(shader_pipeline)
-    emsdk_root = str(details["emsdk_root"])
-    cpython_root = str(details["cpython_root"])
-    tint_path = str(details["tint_path"])
-    display_mode = str(presentation["display_mode"])
-    canvas_width = int(presentation["window_width"])
-    canvas_height = int(presentation["window_height"])
-    asset_revision = _web_asset_revision(
-        staging,
-        player_assets,
-        host_template_source,
-        presentation=presentation,
-        project_template_root=project_web_template,
-    )
-    zstd_source = acquire_git_source(request, _WEB_ZSTD_SOURCE)
-    zstd_argument = (
-        " -DINFERNUX_WEB_ZSTD_SOURCE_DIR="
-        + shlex.quote(build_path(zstd_source))
-    )
-    configuration = (
-        "Release"
-        if request.profile.configuration.value == "release"
-        else "RelWithDebInfo"
-    )
-    configure = (
-        "emcmake cmake "
-        f"-S {shlex.quote(tool_host_template_source)} "
-        f"-B {shlex.quote(tool_build_root)} -G Ninja "
-        f"-DCMAKE_BUILD_TYPE={configuration} "
-        f"-DINFERNUX_WEB_CPYTHON_SOURCE={shlex.quote(cpython_root)} "
-        "-DINFERNUX_WEB_CPYTHON_BUILD="
-        f"{shlex.quote(cpython_root + '/builddir/emscripten-browser')} "
-        f"-DINFERNUX_ENGINE_SOURCE_ROOT={shlex.quote(tool_source_root)} "
-        f"-DINFERNUX_WEB_PLAYER_ASSETS={shlex.quote(tool_player_assets)} "
-        f"-DINFERNUX_WEB_BRANDING_DIR={shlex.quote(tool_branding)} "
-        f"-DINFERNUX_WEB_SHELL_FILE={shlex.quote(tool_web_shell)} "
-        "-DINFERNUX_WEB_LINK_ENGINE_RUNTIME=ON "
-        f"-DINFERNUX_WEB_ASSET_REVISION={asset_revision} "
-        f"-DINFERNUX_WEB_DISPLAY_MODE={shlex.quote(display_mode)} "
-        f"-DINFERNUX_WEB_CANVAS_WIDTH={canvas_width} "
-        f"-DINFERNUX_WEB_CANVAS_HEIGHT={canvas_height}"
-        f"{zstd_argument}"
-    )
-    setup = ["set -e"]
-    if os.name == "nt":
-        setup.extend(
-            (
-                'source "$HOME/miniforge3/etc/profile.d/conda.sh"',
-                "conda activate infernux",
-            )
-        )
-    script = "\n".join(
-        (
-            *setup,
-            f"source {shlex.quote(emsdk_root + '/emsdk_env.sh')} >/dev/null",
-            f"{shlex.quote(python_command)} "
-            f"{shlex.quote(tool_shader_pipeline)} "
-            f"--manifest {shlex.quote(tool_shader_manifest)} "
-            f"--output {shlex.quote(tool_shader_output)} "
-            f"--tint {shlex.quote(tint_path)}",
-            configure,
-            f"cmake --build {shlex.quote(tool_build_root)} --parallel 2",
-        )
-    )
-    request.report("compile", 0, 1, "Building cooked WebGPU Player host")
-    logs = (
-        _run_wsl_build(request, distribution, script)
-        if os.name == "nt"
-        else _run_posix_build(request, script)
+    # InxPack carries bytes, not POSIX modes. Restore execute permission only
+    # for the two declared native tools when consuming an installed package.
+    if os.name != "nt":
+        for name in ("glslang", "tint"):
+            tool = Path(str(details[name]))
+            tool.chmod(tool.stat().st_mode | 0o111)
+    compile_shader_manifest(
+        staging / "shader-cook" / "manifest.json",
+        player_assets / "web-shaders",
+        glslang=str(details["glslang"]),
+        tint=str(details["tint"]),
     )
     request.report("shaders", 2, 2, "Validated WGSL shader catalog ready")
-    required = (
-        "infernux-player.html",
-        "infernux-player.js",
-        "infernux-player.wasm",
-        "infernux-player.data",
-        "infernux-logo.png",
-        "infernux-favicon.png",
-        "infernux-icon-192.png",
-        "infernux-icon-512.png",
-        "infernux.webmanifest",
-        "infernux-branding.js",
-        WEBGPU_CAPABILITY_FILENAME,
-        f"infernux-player.{asset_revision}.js",
-        f"infernux-player.{asset_revision}.wasm",
-        f"infernux-player.{asset_revision}.data",
+    runtime = Path(str(details["player_root"]))
+    revision = _web_asset_revision(
+        staging, player_assets, runtime, presentation=presentation,
+        project_template_root=project_web_template,
     )
-    missing = [name for name in required if not (build_root / name).is_file()]
-    if missing:
-        raise RuntimeError(
-            "Web host build completed without required files: " + ", ".join(missing)
-        )
-    request.report("compile", 1, 1, "Cooked WebGPU Player host compiled")
-    return logs
-
-
-def _discard_mismatched_cmake_source(build_root: Path, expected_source: str) -> None:
-    """Invalidate only a CMake tree tied to an obsolete plugin source path."""
-
-    cache = build_root / "CMakeCache.txt"
-    try:
-        lines = cache.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return
-    prefix = "CMAKE_HOME_DIRECTORY:INTERNAL="
-    configured = next(
-        (line[len(prefix) :] for line in lines if line.startswith(prefix)),
-        "",
+    build_root = staging / "host-build"
+    build_root.mkdir(parents=True)
+    for suffix in ("js", "wasm", "data"):
+        shutil.copy2(runtime / f"infernux-runtime.{suffix}",
+                     build_root / f"infernux-player.{revision}.{suffix}")
+    write_pack(
+        [(path.relative_to(player_assets).as_posix(), path)
+         for path in sorted(player_assets.rglob("*")) if path.is_file()],
+        build_root / f"infernux-player.{revision}.inxpkg",
+        profile=request.profile.configuration.value,
     )
-    if configured and configured.replace("\\", "/") != expected_source.replace("\\", "/"):
-        shutil.rmtree(build_root)
+    for path in (player_assets / "web-branding").iterdir():
+        if path.is_file():
+            shutil.copy2(path, build_root / path.name)
+    shutil.copy2(source_package / "resources/icons/icon.png",
+                 build_root / "infernux-logo.png")
+    shutil.copy2(player_assets / WEBGPU_CAPABILITY_FILENAME,
+                 build_root / WEBGPU_CAPABILITY_FILENAME)
+    document = web_shell.read_text(encoding="utf-8")
+    replacements = {
+        "@INFERNUX_WEB_ASSET_REVISION@": revision,
+        "@INFERNUX_WEB_DISPLAY_MODE@": str(presentation["display_mode"]),
+        "@INFERNUX_WEB_CANVAS_WIDTH@": str(presentation["window_width"]),
+        "@INFERNUX_WEB_CANVAS_HEIGHT@": str(presentation["window_height"]),
+    }
+    for marker, value in replacements.items():
+        document = document.replace(marker, value)
+    # This loader uses the same InxPack format as desktop content. C++ unpacks
+    # into browser memory before starting Python; the web server never exposes
+    # the project's directory tree.
+    loader = (Path(__file__).parent / "templates" / "load_content.js").read_text(
+        encoding="utf-8"
+    ).replace("@INFERNUX_WEB_ASSET_REVISION@", revision)
+    loader = loader.replace("@INFERNUX_WEB_PRESENTATION@", json.dumps({
+        "mode": presentation["display_mode"],
+        "width": presentation["window_width"],
+        "height": presentation["window_height"],
+    }))
+    script = (f"<script>{loader}</script>\n"
+              f'<script src="infernux-player.{revision}.js"></script>')
+    (build_root / "infernux-player.html").write_text(
+        document.replace("{{{ SCRIPT }}}", script), encoding="utf-8", newline="\n"
+    )
+    request.report("runtime", 1, 1, "Precompiled Web Player assembled")
+    return ()
 
 
 def _web_asset_revision(
@@ -1024,7 +928,8 @@ def _web_asset_revision(
     digest.update(b"\0")
     roots = [
         ("player", player_assets),
-        ("host", host_template_source),
+        ("runtime", host_template_source),
+        ("templates", Path(__file__).parent / "templates"),
         ("shaders", staging / "shader-cook"),
     ]
     if project_template_root is not None:
@@ -1045,93 +950,6 @@ def _web_asset_revision(
                 digest.update(chunk)
         digest.update(b"\0")
     return digest.hexdigest()[:24]
-
-
-def _wsl_path(path: Path, distribution: str) -> str:
-    del distribution
-    resolved = path.resolve()
-    drive = resolved.drive.rstrip(":").casefold()
-    if len(drive) == 1 and drive.isalpha():
-        tail = resolved.as_posix()[2:].lstrip("/")
-        return f"/mnt/{drive}/{tail}" if tail else f"/mnt/{drive}"
-    raise RuntimeError(
-        f"The Web WSL2 build requires a local drive path, got: {resolved}"
-    )
-
-
-def _run_wsl_build(
-    request: BuildRequest,
-    distribution: str,
-    script: str,
-) -> tuple[str, ...]:
-    launcher = shutil.which("wsl") or shutil.which("wsl.exe")
-    if not launcher:
-        raise RuntimeError("WSL2 is required for the configured Web toolchain")
-    process = subprocess.Popen(
-        [launcher, "-d", distribution, "--", "bash", "-lc", script],
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    logs: list[str] = []
-    try:
-        if process.stdout is not None:
-            for raw_line in process.stdout:
-                line = raw_line.replace("\x00", "").rstrip()
-                if not line:
-                    continue
-                logs.append(line)
-                request.report("compile", 0, 0, line[:500], source="web-toolchain")
-        return_code = process.wait()
-        if return_code != 0:
-            raise RuntimeError(
-                f"Web host build failed with exit code {return_code}: "
-                f"{logs[-1] if logs else 'no diagnostic output'}"
-            )
-        return tuple(logs)
-    finally:
-        if process.poll() is None:
-            process.terminate()
-            process.wait()
-        if process.stdout is not None:
-            process.stdout.close()
-
-
-def _run_posix_build(request: BuildRequest, script: str) -> tuple[str, ...]:
-    """Run the native Linux Web toolchain used by release CI."""
-
-    process = subprocess.Popen(
-        ["bash", "-lc", script],
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    logs: list[str] = []
-    try:
-        if process.stdout is not None:
-            for raw_line in process.stdout:
-                line = raw_line.replace("\x00", "").rstrip()
-                if not line:
-                    continue
-                logs.append(line)
-                request.report("compile", 0, 0, line[:500], source="web-toolchain")
-        return_code = process.wait()
-        if return_code != 0:
-            raise RuntimeError(
-                f"Web host build failed with exit code {return_code}: "
-                f"{logs[-1] if logs else 'no diagnostic output'}"
-            )
-        return tuple(logs)
-    finally:
-        if process.poll() is None:
-            process.terminate()
-            process.wait()
-        if process.stdout is not None:
-            process.stdout.close()
 
 
 __all__ = ["WebPlatformExporter"]

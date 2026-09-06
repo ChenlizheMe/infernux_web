@@ -2,17 +2,17 @@
 
 ![Build workflow](media/overview.png)
 
-Build browser Players with CPython 3.13 compiled to WebAssembly and rendering through WebGPU. The package owns the Emscripten build integration, browser host, input bridges, diagnostics and project HTML template integration.
+Build browser Players with CPython 3.13 compiled to WebAssembly and rendering through WebGPU. The package includes precompiled WASM/JavaScript, CPython data and native Windows/Linux shader tools, alongside the browser host, input bridges and project HTML templates.
 
 ## Before building
 
-Infernux 0.4.0, an engine source checkout with submodules, and the pinned Linux Web toolchain. Windows builds run through WSL2 (Ubuntu-22.04 by default). A WebGPU-capable browser is required; WebGL is not a fallback.
+Infernux 0.4.0 on Windows x64 or Linux x64, and a WebGPU-capable browser. Ordinary exports require no engine sources, Git submodules, CMake, WSL or Emscripten.
 
-## Toolchain setup
+## Included payload
 
-The plugin is not a precompiled Web SDK. Set INFERNUX_SOURCE_ROOT to the engine checkout. In Linux or WSL, the engine's scripts/setup/build_web_toolchain.sh installs the pinned toolchain into a chosen directory. The current versions are Emscripten 4.0.10, CPython 3.13.15 and Emdawnwebgpu v20260423.175430; the shader compiler uses the pinned Dawn/Tint revision recorded in doctor.py.
+`editor/infernux_web/player/` contains the precompiled runtime and CPython data. `tools/windows-x64/` and `tools/linux-x64/` contain glslang and Tint. Installing this plugin supplies the Web build payload; no separate Web SDK download is required.
 
-Configure INFERNUX_EMSDK_ROOT, INFERNUX_WEB_CPYTHON_ROOT and INFERNUX_WEB_TINT for that installation. Windows may select its WSL distribution with INFERNUX_WEB_WSL_DISTRIBUTION. Use Linux paths for the toolchain inside WSL. Toolchain setup is separate from downloading this plugin.
+Export cooks project content, translates GLSL to WGSL, writes an `.inxpkg` and assembles the web page. It does not rebuild the engine. Browser startup loads the binary package into memory instead of publishing Assets, Library or the project source tree as HTTP directories.
 
 ## Export and serve
 
@@ -26,4 +26,4 @@ Once the template directory exists, shell.html is required. Rebuilding replaces 
 
 ## Troubleshooting
 
-A visible target does not prove its toolchain is ready. Fix the build diagnostics for missing engine sources, Emscripten, CPython or shader tools before exporting. If the browser cannot initialize WebGPU, use a supported browser/device and check its GPU settings; there is no alternate WebGL rendering path.
+If the payload is missing or incompatible, explicitly select a complete `.inxpkg` matching the engine version. Do not install GitHub's source archive as a runtime payload. If the browser cannot initialize WebGPU, use a supported browser/device and check its GPU settings; there is no alternate WebGL rendering path.

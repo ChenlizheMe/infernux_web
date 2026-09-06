@@ -1,4 +1,6 @@
 /dist/
+/package/editor/infernux_web/player/
+/package/editor/infernux_web/tools/
 *.inxpkg
 __pycache__/
 *.py[cod]

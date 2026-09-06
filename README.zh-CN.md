@@ -4,17 +4,17 @@
 
 ![Web 构建流程](package/plugin_pages/media/overview.png)
 
-通过编译为 WebAssembly 的 CPython 3.13 和 WebGPU 渲染构建浏览器 Player。插件负责 Emscripten 构建集成、浏览器宿主、输入桥接、诊断和项目 HTML 模板集成。
+通过编译为 WebAssembly 的 CPython 3.13 和 WebGPU 渲染构建浏览器 Player。插件包含预编译 WASM/JavaScript、CPython 标准库和 Windows/Linux 原生着色器工具，并提供浏览器宿主、输入桥接和项目 HTML 模板。
 
 ## 基本信息
 
 | 项目 | 内容 |
 | --- | --- |
 | 包标识 | `infernux/platform-web` |
-| 插件版本 | 0.1.0 |
-| 引擎兼容范围 | >=0.4.0,<0.5 |
+| 插件版本 | 0.2.0 |
+| 引擎兼容范围 | ==0.4.0 |
 | 构建目标 | `web-wasm32` |
-| 构建宿主 | Linux or Windows + WSL2 |
+| 构建宿主 | Windows x64 / Linux x64 |
 
 ## 安装
 
@@ -26,13 +26,13 @@
 
 ## 环境要求
 
-Infernux 0.4.0、包含子模块的引擎源码，以及固定版本的 Linux Web 工具链。Windows 通过 WSL2 构建，默认发行版为 Ubuntu-22.04。浏览器必须支持 WebGPU，不以 WebGL 兜底。
+Infernux 0.4.0，Windows x64 或 Linux x64 编辑器，以及支持 WebGPU 的浏览器。普通导出不需要引擎源码、Git 子模块、CMake、WSL 或 Emscripten。
 
-## 工具链安装
+## 插件载荷
 
-此插件不是预编译 Web SDK。用 INFERNUX_SOURCE_ROOT 指向引擎源码，在 Linux 或 WSL 中运行引擎的 scripts/setup/build_web_toolchain.sh，将固定工具链安装到指定目录。当前版本为 Emscripten 4.0.10、CPython 3.13.15 和 Emdawnwebgpu v20260423.175430；着色器编译使用 doctor.py 记录的固定 Dawn/Tint 提交。
+`editor/infernux_web/player/` 存放预编译运行时和 CPython 数据；`tools/windows-x64/`、`tools/linux-x64/` 存放 glslang 和 Tint。安装插件即可使用，无需另外下载 Web SDK。
 
-配置 INFERNUX_EMSDK_ROOT、INFERNUX_WEB_CPYTHON_ROOT、INFERNUX_WEB_TINT。Windows 可通过 INFERNUX_WEB_WSL_DISTRIBUTION 选择 WSL 发行版，WSL 内工具链须使用 Linux 路径。工具链准备与下载此插件是两件事。
+导出只处理项目内容、将 GLSL 转为 WGSL、封装 `.inxpkg` 并生成网页，不重新编译引擎。游戏内容进入二进制包，浏览器加载后在内存中挂载，HTTP 目录不暴露 Assets、Library 或项目源码树。
 
 ## 导出与访问
 
@@ -46,7 +46,7 @@ Infernux 0.4.0、包含子模块的引擎源码，以及固定版本的 Linux We
 
 ## 排错
 
-构建目标可见不等于工具链已就绪。先解决引擎源码、Emscripten、CPython、着色器工具缺失诊断。浏览器无法初始化 WebGPU 时，检查浏览器、设备支持和 GPU 设置；不存在 WebGL 渲染兜底。
+若提示插件载荷缺失或引擎版本不兼容，请显式选择匹配版本的完整 `.inxpkg`，不要安装 GitHub 源码归档。浏览器无法初始化 WebGPU 时，检查浏览器、设备支持和 GPU 设置；不存在 WebGL 渲染兜底。
 
 ## 开发与打包
 
@@ -65,7 +65,7 @@ README.zh-CN.md
 
 运行 `python package.py dist/infernux.platform-web.inxpkg` 本地打包。脚本仅使用 Python 标准库，不需要导入或安装 Infernux。在外层进行构建，最后将需要交付的文件放进 package/ 即可。
 
-维护者运行 `python release.py v0.1.0` 生成插件和发布清单；推送与插件版本一致的标签后，由 GitHub Actions 打包并上传两个文件。编辑器根据发布清单选择兼容版本。
+维护者在外层 `native/` 构建：CMake 的 `prebuild_web_player` 和 `prebuild_web_tools` 直接将产物发布到插件目录。普通用户不执行这些构建。运行 `python release.py v0.2.0` 生成插件和发布清单；推送与插件版本一致的标签后，由 GitHub Actions 打包并上传两个文件。编辑器根据发布清单选择兼容版本。
 
 ## 许可证
 

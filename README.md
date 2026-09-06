@@ -4,17 +4,17 @@
 
 ![Web build workflow](package/plugin_pages/media/overview.png)
 
-Build browser Players with CPython 3.13 compiled to WebAssembly and rendering through WebGPU. The package owns the Emscripten build integration, browser host, input bridges, diagnostics and project HTML template integration.
+Build browser Players with CPython 3.13 compiled to WebAssembly and rendering through WebGPU. The package includes precompiled WASM/JavaScript, CPython data and native Windows/Linux shader tools, alongside the browser host, input bridges and project HTML templates.
 
 ## At a glance
 
 | Item | Value |
 | --- | --- |
 | Package | `infernux/platform-web` |
-| Plugin version | 0.1.0 |
-| Engine compatibility | >=0.4.0,<0.5 |
+| Plugin version | 0.2.0 |
+| Engine compatibility | ==0.4.0 |
 | Target | `web-wasm32` |
-| Build host | Linux or Windows + WSL2 |
+| Build host | Windows x64 / Linux x64 |
 | Rendering | WebAssembly / WebGPU |
 
 ## Install
@@ -27,13 +27,13 @@ If your editor's bundled catalog predates this repository, add `https://github.c
 
 ## Requirements
 
-Infernux 0.4.0, an engine source checkout with submodules, and the pinned Linux Web toolchain. Windows builds run through WSL2 (Ubuntu-22.04 by default). A WebGPU-capable browser is required; WebGL is not a fallback.
+Infernux 0.4.0 on Windows x64 or Linux x64, and a WebGPU-capable browser. Ordinary exports require no engine sources, Git submodules, CMake, WSL or Emscripten.
 
-## Toolchain setup
+## Included payload
 
-The plugin is not a precompiled Web SDK. Set INFERNUX_SOURCE_ROOT to the engine checkout. In Linux or WSL, the engine's scripts/setup/build_web_toolchain.sh installs the pinned toolchain into a chosen directory. The current versions are Emscripten 4.0.10, CPython 3.13.15 and Emdawnwebgpu v20260423.175430; the shader compiler uses the pinned Dawn/Tint revision recorded in doctor.py.
+`editor/infernux_web/player/` contains the precompiled runtime and CPython data. `tools/windows-x64/` and `tools/linux-x64/` contain glslang and Tint. Installing this plugin supplies the Web build payload; no separate Web SDK download is required.
 
-Configure INFERNUX_EMSDK_ROOT, INFERNUX_WEB_CPYTHON_ROOT and INFERNUX_WEB_TINT for that installation. Windows may select its WSL distribution with INFERNUX_WEB_WSL_DISTRIBUTION. Use Linux paths for the toolchain inside WSL. Toolchain setup is separate from downloading this plugin.
+Export cooks project content, translates GLSL to WGSL, writes an `.inxpkg` and assembles the web page. It does not rebuild the engine. Browser startup loads the binary package into memory instead of publishing Assets, Library or the project source tree as HTTP directories.
 
 ## Export and serve
 
@@ -47,7 +47,7 @@ Once the template directory exists, shell.html is required. Rebuilding replaces 
 
 ## Troubleshooting
 
-A visible target does not prove its toolchain is ready. Fix the build diagnostics for missing engine sources, Emscripten, CPython or shader tools before exporting. If the browser cannot initialize WebGPU, use a supported browser/device and check its GPU settings; there is no alternate WebGL rendering path.
+If the payload is missing or incompatible, explicitly select a complete `.inxpkg` matching the engine version. Do not install GitHub's source archive as a runtime payload. If the browser cannot initialize WebGPU, use a supported browser/device and check its GPU settings; there is no alternate WebGL rendering path.
 
 ## Develop and package
 
@@ -66,7 +66,7 @@ README.zh-CN.md
 
 Run `python package.py dist/infernux.platform-web.inxpkg` to package locally. This standalone script uses only Python's standard library and does not require an engine installation. Build outside package/, then place the files to ship inside package/ before packaging.
 
-Maintainers run `python release.py v0.1.0` to create the archive and its release manifest. Pushing a matching version tag publishes both files through GitHub Actions. The editor uses that manifest to select a compatible release.
+Maintainers build from the outer `native/` directory: CMake targets `prebuild_web_player` and `prebuild_web_tools` publish directly into the plugin. Ordinary users never run those builds. Run `python release.py v0.2.0` to create the archive and its release manifest. Pushing a matching version tag publishes both files through GitHub Actions. The editor uses that manifest to select a compatible release.
 
 ## License
 
