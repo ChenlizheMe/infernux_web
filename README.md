@@ -1,73 +1,34 @@
 # Infernux Web Platform
 
-[简体中文](README.zh-CN.md) · [Releases](https://github.com/ChenlizheMe/infernux_web/releases) · [Infernux](https://github.com/ChenlizheMe/Infernux)
+The official browser build plugin for [Infernux](https://github.com/ChenlizheMe/Infernux). It exports an Infernux game as WebAssembly, runs the engine's Python gameplay layer in the browser, and renders through WebGPU.
 
-![Web build workflow](package/plugin_pages/media/overview.png)
+[简体中文](README.zh-CN.md) · [Infernux Engine](https://github.com/ChenlizheMe/Infernux) · [Plugin Template](https://github.com/ChenlizheMe/infernux_plugin_template) · [Releases](https://github.com/ChenlizheMe/infernux_web/releases)
 
-Build browser Players with CPython 3.13 compiled to WebAssembly and rendering through WebGPU. The package includes precompiled WASM/JavaScript, CPython data and native Windows/Linux shader tools, alongside the browser host, input bridges and project HTML templates.
+![Infernux Web export workflow](package/plugin_pages/media/overview.png)
 
-## At a glance
+## What this plugin provides
 
-| Item | Value |
-| --- | --- |
-| Package | `infernux/platform-web` |
-| Plugin version | 0.2.0 |
-| Engine compatibility | ==0.4.0 |
-| Target | `web-wasm32` |
-| Build host | Windows x64 / Linux x64 |
-| Rendering | WebAssembly / WebGPU |
+- The `web-wasm32` build target
+- Precompiled WebAssembly/JavaScript Player and CPython data
+- Native glslang and Tint tools for Windows x64 and Linux x64 hosts
+- WebGPU rendering, browser input bridges, and a customizable HTML shell
 
-## Install
+| Package | Version | Compatible engine | Build hosts | Target |
+| --- | --- | --- | --- | --- |
+| `infernux/platform-web` | 0.2.0 | Infernux 0.4.0 | Windows/Linux x64 | WebAssembly + WebGPU |
 
-1. Open your project in Infernux 0.4.0 and open the Plugins panel.
-2. Select Infernux Web Platform in the official list, then import and enable it.
-3. Open the build settings and select the target. Resolve the reported prerequisites before exporting.
+## Install and use
 
-If your editor's bundled catalog predates this repository, add `https://github.com/ChenlizheMe/infernux_web` as a GitHub plugin source, or import `infernux.platform-web.inxpkg` from [Releases](https://github.com/ChenlizheMe/infernux_web/releases/latest). GitHub's automatic source ZIP is the author repository, not the installable plugin artifact.
+Open **Plugins** in Infernux, select **Infernux Web Platform** from the official catalog, then import and enable it. Official installs use the Infernux distribution service first and GitHub Releases as the network fallback. Manual installation is available through `infernux.platform-web.inxpkg` on the Releases page.
 
-## Requirements
+Choose `web-wasm32` in the build settings and export. Publish the entire generated directory and serve it over HTTP for local testing or HTTPS in production; opening the page with `file://` is unsupported. A WebGPU-capable browser and device are required. Users do not install Emscripten or compile the engine.
 
-Infernux 0.4.0 on Windows x64 or Linux x64, and a WebGPU-capable browser. Ordinary exports require no engine sources, Git submodules, CMake, WSL or Emscripten.
+To customize the host page, copy `package/editor/infernux_web/templates/host/shell.html` to `ProjectSettings/WebTemplate/shell.html` in your project. Keep the runtime markers and canvas integration while changing the surrounding page.
 
-## Included payload
+## Repository guide
 
-`editor/infernux_web/player/` contains the precompiled runtime and CPython data. `tools/windows-x64/` and `tools/linux-x64/` contain glslang and Tint. Installing this plugin supplies the Web build payload; no separate Web SDK download is required.
-
-Export cooks project content, translates GLSL to WGSL, writes an `.inxpkg` and assembles the web page. It does not rebuild the engine. Browser startup loads the binary package into memory instead of publishing Assets, Library or the project source tree as HTTP directories.
-
-## Export and serve
-
-Select web-wasm32 in the build settings. Publish the whole generated directory, including infernux-player.html, JavaScript, WebAssembly and game data. Serve it over HTTP on localhost for testing, or HTTPS for deployment; do not open the page through file://. Browser permissions and device capabilities must allow WebGPU.
-
-## Project Web template
-
-Create ProjectSettings/WebTemplate/shell.html from package/editor/infernux_web/templates/host/shell.html. Keep the runtime markers and canvas integration intact while changing CSS, metadata and the surrounding page. Other template files are exported under web-template/ with relative directories preserved.
-
-Once the template directory exists, shell.html is required. Rebuilding replaces generated output: edit project template sources, not the exported files. Gameplay UI uses Infernux Screen UI; the HTML shell hosts the game rather than implementing its UI as DOM elements.
-
-## Troubleshooting
-
-If the payload is missing or incompatible, explicitly select a complete `.inxpkg` matching the engine version. Do not install GitHub's source archive as a runtime payload. If the browser cannot initialize WebGPU, use a supported browser/device and check its GPU settings; there is no alternate WebGL rendering path.
-
-## Develop and package
-
-Only `package/` becomes the InxPackage payload. The outer README, SVG illustration sources, release automation and build scripts remain repository files. In-editor documentation is separate, under `package/plugin_pages/`.
-
-```text
-package/
-  inx_package.json
-  editor/infernux_web/
-  plugin_pages/
-package.py
-release.py
-README.md
-README.zh-CN.md
-```
-
-Run `python package.py dist/infernux.platform-web.inxpkg` to package locally. This standalone script uses only Python's standard library and does not require an engine installation. Build outside package/, then place the files to ship inside package/ before packaging.
-
-Maintainers build from the outer `native/` directory: CMake targets `prebuild_web_player` and `prebuild_web_tools` publish directly into the plugin. Ordinary users never run those builds. Run `python release.py v0.2.0` to create the archive and its release manifest. Pushing a matching version tag publishes both files through GitHub Actions. The editor uses that manifest to select a compatible release.
+Only `package/` is distributed as the plugin. The outer native sources, build scripts, tests, and CI are maintainer material. Release engineering builds the Web Player and shader tools directly into `package/`; pushing a matching `v<version>` tag publishes the `.inxpkg` and release manifest automatically.
 
 ## License
 
-[MIT](LICENSE). Third-party SDKs and the engine runtime keep their own licenses; they are not relicensed by this plugin.
+[MIT](LICENSE). Bundled third-party components retain their own licenses.
