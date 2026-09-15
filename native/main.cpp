@@ -196,8 +196,9 @@ class WebFullscreenRendererHost final : public infernux::FullscreenRendererHost
         return 0;
     }
 
-    [[nodiscard]] infernux::rhi::ShaderModuleHandle AcquireShaderModule(const std::string &name,
-                                                                        infernux::rhi::ShaderStage stage) override
+    [[nodiscard]] infernux::rhi::ShaderModuleHandle AcquireShaderModule(
+        const std::string &name, infernux::rhi::ShaderStage stage,
+        uint32_t /*inputTextureCount*/) override
     {
         const char *stageName = nullptr;
         if (stage == infernux::rhi::ShaderStage::Vertex)
