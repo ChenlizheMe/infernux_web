@@ -1199,7 +1199,7 @@ def _submit_screen_ui() -> None:
     ):
         return
 
-    from Infernux.engine.runtime_screen_ui import RuntimeScreenUISubmission
+    from Infernux.engine.runtime_screen_ui import RuntimeScreenUISubmission, _canvas_metrics
     from Infernux.engine.ui.runtime_canvas_snapshot import (
         collect_sorted_runtime_canvas_snapshot,
     )
@@ -1249,6 +1249,7 @@ def _process_screen_ui_events(delta_time: float) -> None:
     from Infernux.engine.ui.runtime_canvas_snapshot import (
         collect_sorted_runtime_canvas_snapshot,
     )
+    from Infernux.engine.runtime_screen_ui import _canvas_metrics
     from Infernux.input import Input
 
     scene = _player_scene_manager.get_active_scene()
@@ -1267,18 +1268,17 @@ def _process_screen_ui_events(delta_time: float) -> None:
     )
     canvas_positions: list[tuple[float, float]] = []
     for canvas in canvases:
-        reference_width = float(canvas.reference_width)
-        reference_height = float(canvas.reference_height)
+        reference_width = float(getattr(canvas, "reference_width", 1920))
+        reference_height = float(getattr(canvas, "reference_height", 1080))
         if reference_width < 1.0 or reference_height < 1.0:
             canvas_positions.append((0.0, 0.0))
             continue
-        scale_x, scale_y, _ = canvas.compute_scale(
-            float(_screen_width), float(_screen_height)
+        scale_x, scale_y, _, logical_width, logical_height = _canvas_metrics(
+            canvas, _screen_width, _screen_height
         )
-        logical_width, logical_height = canvas.compute_logical_size(
-            float(_screen_width), float(_screen_height)
-        )
-        canvas.set_input_logical_size(logical_width, logical_height)
+        set_input_logical_size = getattr(canvas, "set_input_logical_size", None)
+        if callable(set_input_logical_size):
+            set_input_logical_size(logical_width, logical_height)
         canvas_positions.append(
             (
                 float(mouse_x) / max(float(scale_x), 1.0e-6),

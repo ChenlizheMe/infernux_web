@@ -464,8 +464,9 @@ PyObject *ScreenUIAddImage(PyObject *, PyObject *arguments)
 
 PyObject *ScreenUIAddText(PyObject *, PyObject *arguments)
 {
-    if (PyTuple_Size(arguments) != 20) {
-        PyErr_SetString(PyExc_TypeError, "screen_ui_add_text expects 20 arguments");
+    const Py_ssize_t argumentCount = PyTuple_Size(arguments);
+    if (argumentCount < 20 || argumentCount > 22) {
+        PyErr_SetString(PyExc_TypeError, "screen_ui_add_text expects 20-22 arguments");
         return nullptr;
     }
     const int list = static_cast<int>(PyLong_AsLong(PyTuple_GetItem(arguments, 0)));
