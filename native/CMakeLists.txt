@@ -220,6 +220,7 @@ if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
         "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingPhysics.cpp"
         "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingResources.cpp"
         "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingScene.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingSemanticCatalog.cpp"
         "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingTagLayer.cpp"
         "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingVector2f.cpp"
         "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingVector3f.cpp"

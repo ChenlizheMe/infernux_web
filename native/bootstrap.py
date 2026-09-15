@@ -1130,6 +1130,12 @@ class _WebScreenUIRenderer:
     def add_filled_rect(self, *arguments: Any) -> None:
         self._host.screen_ui_add_filled_rect(*arguments)
 
+    def push_clip_rect(self, *arguments: Any) -> None:
+        self._host.screen_ui_push_clip_rect(*arguments)
+
+    def pop_clip_rect(self, *arguments: Any) -> None:
+        self._host.screen_ui_pop_clip_rect(*arguments)
+
     def add_image(self, *arguments: Any) -> None:
         self._host.screen_ui_add_image(*arguments)
 
@@ -1266,6 +1272,10 @@ def _process_screen_ui_events(delta_time: float) -> None:
         scale_x, scale_y, _ = canvas.compute_scale(
             float(_screen_width), float(_screen_height)
         )
+        logical_width, logical_height = canvas.compute_logical_size(
+            float(_screen_width), float(_screen_height)
+        )
+        canvas.set_input_logical_size(logical_width, logical_height)
         canvas_positions.append(
             (
                 float(mouse_x) / max(float(scale_x), 1.0e-6),

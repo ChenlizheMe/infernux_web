@@ -323,6 +323,18 @@ bool WebScreenUIRenderer::BeginFrameCached(uint32_t width, uint32_t height, uint
     return false;
 }
 
+void WebScreenUIRenderer::PushClipRect(int list, float minX, float minY, float maxX, float maxY)
+{
+    if (ImDrawList *drawList = DrawList(list))
+        drawList->PushClipRect(ImVec2(minX, minY), ImVec2(maxX, maxY), true);
+}
+
+void WebScreenUIRenderer::PopClipRect(int list)
+{
+    if (ImDrawList *drawList = DrawList(list))
+        drawList->PopClipRect();
+}
+
 void WebScreenUIRenderer::AddFilledRect(int list, float minX, float minY, float maxX, float maxY, float r, float g,
                                         float b, float a, float rounding)
 {

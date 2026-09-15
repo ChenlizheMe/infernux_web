@@ -394,6 +394,28 @@ PyObject *ScreenUIBeginFrameCached(PyObject *, PyObject *arguments)
     return PyBool_FromLong(g_screenUIRenderer && g_screenUIRenderer->BeginFrameCached(width, height, revision));
 }
 
+PyObject *ScreenUIPushClipRect(PyObject *, PyObject *arguments)
+{
+    int list = 0;
+    double minX = 0.0, minY = 0.0, maxX = 0.0, maxY = 0.0;
+    if (!PyArg_ParseTuple(arguments, "idddd:screen_ui_push_clip_rect", &list, &minX, &minY, &maxX, &maxY))
+        return nullptr;
+    if (g_screenUIRenderer)
+        g_screenUIRenderer->PushClipRect(list, static_cast<float>(minX), static_cast<float>(minY),
+                                        static_cast<float>(maxX), static_cast<float>(maxY));
+    Py_RETURN_NONE;
+}
+
+PyObject *ScreenUIPopClipRect(PyObject *, PyObject *arguments)
+{
+    int list = 0;
+    if (!PyArg_ParseTuple(arguments, "i:screen_ui_pop_clip_rect", &list))
+        return nullptr;
+    if (g_screenUIRenderer)
+        g_screenUIRenderer->PopClipRect(list);
+    Py_RETURN_NONE;
+}
+
 PyObject *ScreenUIAddFilledRect(PyObject *, PyObject *arguments)
 {
     int list = 0;
@@ -627,6 +649,8 @@ PyMethodDef kMethods[] = {
     {"is_text_input_active", IsTextInputActive, METH_NOARGS, "Return whether browser text input is active."},
     {"screen_ui_begin_frame", ScreenUIBeginFrame, METH_VARARGS, nullptr},
     {"screen_ui_begin_frame_cached", ScreenUIBeginFrameCached, METH_VARARGS, nullptr},
+    {"screen_ui_push_clip_rect", ScreenUIPushClipRect, METH_VARARGS, nullptr},
+    {"screen_ui_pop_clip_rect", ScreenUIPopClipRect, METH_VARARGS, nullptr},
     {"screen_ui_add_filled_rect", ScreenUIAddFilledRect, METH_VARARGS, nullptr},
     {"screen_ui_add_image", ScreenUIAddImage, METH_VARARGS, nullptr},
     {"screen_ui_add_text", ScreenUIAddText, METH_VARARGS, nullptr},

@@ -30,6 +30,8 @@ class WebScreenUIRenderer final
     bool Initialize(wgpu::Device device, wgpu::Queue queue, wgpu::TextureFormat colorFormat);
     void BeginFrame(uint32_t width, uint32_t height);
     bool BeginFrameCached(uint32_t width, uint32_t height, uint64_t contentRevision);
+    void PushClipRect(int list, float minX, float minY, float maxX, float maxY);
+    void PopClipRect(int list);
 
     void AddFilledRect(int list, float minX, float minY, float maxX, float maxY, float r, float g, float b, float a,
                        float rounding);
