@@ -39,6 +39,9 @@ _runtime_api_installed = False
 _player_root = "/infernux/player"
 _player_python = f"{_player_root}/python/site-packages"
 _runtime_data_root = ""
+# Browser/WASM does not ship the native Numba/LLVM payload.  Set the explicit
+# compatibility profile before project modules are imported.
+os.environ.setdefault("INFERNUX_WEB_RUNTIME", "1")
 if os.path.isdir(_player_python) and _player_python not in sys.path:
     sys.path.insert(0, _player_python)
 if os.path.isdir(_player_root):

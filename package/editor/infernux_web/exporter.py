@@ -457,6 +457,7 @@ def _cook_web_player_assets(
             "entry_point": "infernux-player.html",
             "platform": "web",
             "architecture": "wasm32",
+            "python_jit_fallback": True,
         },
     )
     player_assets = staging / "player-assets"
