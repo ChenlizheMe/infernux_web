@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import compileall
+import ast
 import hashlib
 import importlib.util
 import json
@@ -153,6 +154,7 @@ class WebPlatformExporter(PlatformExporter):
                 request,
                 default_shell,
             )
+            _reject_unshipped_web_dependencies(request.project_root)
             request.report("prepare", 0, 1, "Preparing Web Player staging")
             _prepare_web_staging(staging)
             game_name, player_assets = _cook_web_player_assets(request, staging)
@@ -467,6 +469,39 @@ def _cook_web_player_assets(
         player_assets / cooked.data_directory.name,
     )
     return cooked.game_name, player_assets
+
+
+def _reject_unshipped_web_dependencies(project_root: str | Path) -> None:
+    """Fail the Web build before publishing a runtime that cannot import a script.
+
+    The browser Player currently ships CPython and the engine's pure-Python
+    package, but no numerical extension modules.  In particular, NumPy cannot
+    be made usable by copying its desktop files: its native extension ABI is
+    not WASM.  Detect this at build time instead of producing a package that
+    only fails after the first scene loads.
+    """
+    unsupported: set[str] = set()
+    assets = Path(project_root).resolve() / "Assets"
+    for source_path in assets.rglob("*.py") if assets.is_dir() else ():
+        try:
+            tree = ast.parse(source_path.read_text(encoding="utf-8"), str(source_path))
+        except (OSError, SyntaxError) as error:
+            raise ValueError(f"Web dependency scan failed for {source_path}: {error}") from error
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = (alias.name.split(".", 1)[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = (node.module.split(".", 1)[0],)
+            else:
+                continue
+            unsupported.update(name for name in names if name in {"numpy", "numba", "llvmlite"})
+    if unsupported:
+        names = ", ".join(sorted(unsupported))
+        raise ValueError(
+            "Web Player cannot package native numerical dependencies yet: "
+            f"{names}. A WASM-compatible dependency payload is required; "
+            "the build was stopped before publishing an unusable Player."
+        )
 
 
 def _stage_web_branding(
