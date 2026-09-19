@@ -141,6 +141,8 @@ add_executable(InfernuxWebPlayerHost
     "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/function/audio/AudioEngine.cpp"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/function/audio/AudioListener.cpp"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/function/audio/AudioSource.cpp"
+    "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/function/audio/AudioStreamBuffer.cpp"
+    "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/function/audio/AudioStreamDecoder.cpp"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/platform/filesystem/InxPack.cpp"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/platform/input/InputManager.cpp"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/external/stb/stb_vorbis.c"
@@ -257,6 +259,7 @@ if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
     list(FILTER _web_resource_runtime_sources EXCLUDE REGEX "/AssetImporter/")
     list(FILTER _web_resource_runtime_sources EXCLUDE REGEX "SkinnedModelImporter\\.cpp$")
     list(FILTER _web_resource_runtime_sources EXCLUDE REGEX "/InxMesh/MeshLoader\\.cpp$")
+    list(FILTER _web_resource_runtime_sources EXCLUDE REGEX "/InxMesh/ModelVertexBasis\\.cpp$")
     list(FILTER _web_resource_runtime_sources EXCLUDE REGEX "TextureProcessor\\.cpp$")
     list(FILTER _web_resource_runtime_sources EXCLUDE REGEX "InxShaderLoader\\.cpp$")
     list(FILTER _web_resource_runtime_sources EXCLUDE REGEX "InxPack\\.cpp$")

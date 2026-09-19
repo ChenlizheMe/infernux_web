@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import locale
 import re
 import subprocess
 import tempfile
@@ -362,10 +363,14 @@ def _parse_integer_qualifiers(qualifiers: str) -> dict[str, int]:
 
 def _run(command: Sequence[str] | Iterable[str], label: str) -> None:
     arguments = tuple(str(item) for item in command)
-    completed = subprocess.run(arguments, capture_output=True, text=True, check=False)
+    # Shader tools are native host executables.  Their diagnostic stream uses
+    # the host locale on Windows even when Python runs in UTF-8 mode, so keep
+    # subprocess output as bytes and decode only an actual failure.
+    completed = subprocess.run(arguments, capture_output=True, check=False)
     if completed.returncode == 0:
         return
-    detail = completed.stderr.strip() or completed.stdout.strip()
+    payload = completed.stderr.strip() or completed.stdout.strip()
+    detail = payload.decode(locale.getencoding(), errors="replace")
     raise WebShaderToolError(
         f"{label} failed with exit code {completed.returncode}: "
         f"{detail or 'no diagnostic output'}"
