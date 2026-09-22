@@ -6,6 +6,8 @@ include(ExternalProject)
 set(INFERNUX_DAWN_SOURCE "" CACHE PATH "Pinned Dawn source with fetched dependencies")
 set(INFERNUX_ENGINE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../.." CACHE PATH
     "Matching engine checkout providing glslang")
+set(INFERNUX_WEB_TOOLS_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/publish/tools" CACHE PATH
+    "Out-of-source destination for published Web shader tools")
 if(WIN32)
     set(_host windows-x64)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -16,7 +18,10 @@ endif()
 if(NOT EXISTS "${INFERNUX_DAWN_SOURCE}/CMakeLists.txt")
     message(FATAL_ERROR "INFERNUX_DAWN_SOURCE must contain the pinned Dawn source")
 endif()
-set(_tools "${CMAKE_CURRENT_SOURCE_DIR}/../../package/editor/infernux_web/tools/${_host}")
+if(NOT IS_ABSOLUTE "${INFERNUX_WEB_TOOLS_OUTPUT_DIR}")
+    message(FATAL_ERROR "INFERNUX_WEB_TOOLS_OUTPUT_DIR must be absolute")
+endif()
+set(_tools "${INFERNUX_WEB_TOOLS_OUTPUT_DIR}/${_host}")
 set(_common_args
     -DCMAKE_BUILD_TYPE=Release
     -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded

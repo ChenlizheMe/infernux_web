@@ -39,6 +39,13 @@ _runtime_api_installed = False
 _player_root = "/infernux/player"
 _player_python = f"{_player_root}/python/site-packages"
 _runtime_data_root = ""
+_RUNTIME_ASSET_CATALOG_SCHEMA = "infernux.runtime_asset_catalog"
+_RUNTIME_ASSET_CATALOG_FIELDS = frozenset(
+    {"$schema", "player_host", "packages", "artifacts"}
+)
+_RUNTIME_PACKAGE_FIELDS = frozenset(
+    {"path", "archive_bytes", "file_count", "raw_bytes", "stored_bytes", "codec"}
+)
 # Browser/WASM does not ship the native Numba/LLVM payload.  Set the explicit
 # compatibility profile before project modules are imported.
 os.environ.setdefault("INFERNUX_WEB_RUNTIME", "1")
@@ -46,6 +53,25 @@ if os.path.isdir(_player_python) and _player_python not in sys.path:
     sys.path.insert(0, _player_python)
 if os.path.isdir(_player_root):
     print("INFERNUX_WEB_COOKED_CONTENT_READY root=/infernux/player")
+
+
+def _validate_runtime_asset_catalog(catalog: Any) -> list[dict[str, Any]]:
+    """Reject catalog drift before extracting any package into MEMFS."""
+
+    if (
+        not isinstance(catalog, dict)
+        or catalog.get("$schema") != _RUNTIME_ASSET_CATALOG_SCHEMA
+        or set(catalog) != _RUNTIME_ASSET_CATALOG_FIELDS
+        or not isinstance(catalog.get("packages"), list)
+        or not catalog["packages"]
+        or not isinstance(catalog.get("artifacts"), list)
+    ):
+        raise RuntimeError("Web Player runtime asset catalog uses an unsupported schema")
+    packages = catalog["packages"]
+    for package in packages:
+        if not isinstance(package, dict) or set(package) != _RUNTIME_PACKAGE_FIELDS:
+            raise RuntimeError("Web Player runtime catalog package uses an unsupported schema")
+    return packages
 
 
 def _prepare_cooked_player_content() -> str:
@@ -74,9 +100,7 @@ def _prepare_cooked_player_content() -> str:
         )).decode("utf-8")
     )
 
-    packages = catalog.get("packages")
-    if not isinstance(packages, list) or not packages:
-        raise RuntimeError("Web Player runtime catalog has no packages")
+    packages = _validate_runtime_asset_catalog(catalog)
     extracted_packages: set[str] = set()
     extracted_entries = 0
     for package_record in packages:
@@ -265,7 +289,7 @@ def _install_platform_runtime_api(native_module: Any) -> None:
     package_root = os.path.join(_player_python, "Infernux")
     package = _package_namespace("Infernux", package_root)
     _package_namespace("Infernux.engine", os.path.join(package_root, "engine"))
-    _package_namespace("Infernux.core", os.path.join(package_root, "core"))
+    core = _package_namespace("Infernux.core", os.path.join(package_root, "core"))
     components = _package_namespace(
         "Infernux.components", os.path.join(package_root, "components")
     )
@@ -350,6 +374,17 @@ def _install_platform_runtime_api(native_module: Any) -> None:
     coroutine_module = importlib.import_module("Infernux.coroutine")
     batch_module = importlib.import_module("Infernux.batch")
     instantiate_module = importlib.import_module("Infernux.instantiate")
+    assets_module = importlib.import_module("Infernux.core.assets")
+    sandbox_files_module = importlib.import_module("Infernux.core.sandbox_files")
+
+    core_exports = {
+        "AssetFile": assets_module.AssetFile,
+        "AssetManager": assets_module.AssetManager,
+        "SandboxPath": sandbox_files_module.SandboxPath,
+    }
+    for name, value in core_exports.items():
+        setattr(core, name, value)
+    core.__all__ = tuple(core_exports)
 
     for source in (lib, math_module):
         exports = getattr(source, "__all__", None)
@@ -383,11 +418,11 @@ def _install_platform_runtime_api(native_module: Any) -> None:
         "batch_write": batch_module.batch_write,
         "Instantiate": instantiate_module.Instantiate,
         "Destroy": instantiate_module.Destroy,
+        **core_exports,
     }
     for name, value in gameplay_exports.items():
         setattr(package, name, value)
     package.Debug = debug_module.Debug
-    package.__version__ = "0.4.0"
     package.__all__ = tuple(
         sorted(
             {
@@ -474,6 +509,13 @@ def _prepare_player_asset_contract() -> None:
     _persistent_root = "/infernux-player-data"
     os.makedirs(_persistent_root, exist_ok=True)
     os.environ["_INFERNUX_PLAYER_PERSISTENT_DATA_ROOT"] = _persistent_root
+    # Loose files are an explicit capability and never share an identity or
+    # writable root with cooked assets, bundled Python, or host executables.
+    # Keep the Player executable-directory abstraction inside the persistent
+    # browser data tree so SandboxPath cannot mutate /infernux/player.
+    _loose_root = os.path.join(_persistent_root, "loose")
+    os.makedirs(_loose_root, exist_ok=True)
+    os.environ["_INFERNUX_PLAYER_INSTALL_ROOT"] = _loose_root
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     sys.dont_write_bytecode = True
 
@@ -513,15 +555,22 @@ def _prepare_player_asset_contract() -> None:
         _runtime_data_root, "Library", "RuntimeAssetRecords.json"
     )
     records_document = _read_json(records_path)
+    if (
+        records_document.get("$schema") != "infernux.runtime_asset_records"
+        or set(records_document) != {"$schema", "entries"}
+        or not isinstance(records_document.get("entries"), list)
+    ):
+        raise RuntimeError("Web Player runtime asset records use an unsupported schema")
     type_registry_path = os.path.join(
         _runtime_data_root, "Library", "RuntimeTypeRegistry.json"
     )
-    build_settings = _read_json(
-        os.path.join(_runtime_data_root, "ProjectSettings", "BuildSettings.json")
-    )
-    scenes = build_settings.get("scenes")
-    if not isinstance(scenes, list) or not scenes or not isinstance(scenes[0], str):
-        raise RuntimeError("Web Player BuildSettings has no initial scene")
+    scene_guids = build_manifest_document.get("scene_guids")
+    if (
+        not isinstance(scene_guids, list)
+        or not scene_guids
+        or not isinstance(scene_guids[0], str)
+    ):
+        raise RuntimeError("Web Player BuildManifest has no initial scene GUID")
 
     asset_count = int(initialize_runtime_assets(_runtime_data_root, records_path))
     print(f"INFERNUX_WEB_ASSET_REGISTRY_READY assets={asset_count}")
@@ -546,10 +595,11 @@ def _prepare_player_asset_contract() -> None:
         "INFERNUX_WEB_COMPONENT_SURFACE_READY "
         "audio=true particle=true"
     )
-    scene_path = runtime_catalog.resolve_scene(scenes[0])
+    scene_path = runtime_catalog.resolve_scene(scene_guids[0])
     if scene_path is None:
         raise RuntimeError(
-            f"Web Player runtime catalog cannot resolve initial scene: {scenes[0]}"
+            "Web Player runtime catalog cannot resolve initial scene GUID: "
+            f"{scene_guids[0]}"
         )
     _player_initial_scene_path = scene_path
     _player_runtime_manifest = runtime_manifest
@@ -558,7 +608,7 @@ def _prepare_player_asset_contract() -> None:
     _player_asset_database = database
     _player_asset_count = asset_count
     _player_type_count = type_count
-    _player_initial_scene_name = scenes[0]
+    _player_initial_scene_name = scene_guids[0]
 
 
 def _prepare_player_runtime() -> None:
@@ -572,6 +622,15 @@ def _prepare_player_runtime() -> None:
     from Infernux.plugins import PluginManager
 
     session = PlayerRuntimeSession(asset_database=_player_asset_database)
+    from Infernux.application import Application
+    from Infernux.core.assets import AssetManager
+
+    # Bind the platform session before project code or the initial scene can
+    # query assets. AssetManager receives only the runtime database installed
+    # from RuntimeAssetRecords; managed paths are resolved by the frozen
+    # catalog configured immediately below, never by source filesystem scans.
+    Application._bind_engine(session, "player")
+    AssetManager.initialize(session)
     session.configure_runtime_contract(
         _player_runtime_manifest, _player_runtime_catalog
     )
@@ -581,13 +640,16 @@ def _prepare_player_runtime() -> None:
     )
     scene_manager = SceneManager.instance()
     _install_runtime_lifecycle_bridge(scene_manager, session.execution_scheduler)
-    scene_path = _player_initial_scene_path
-    scenes = [_player_initial_scene_name]
-    print(f"INFERNUX_WEB_SCENE_LOADING scene={scenes[0]}")
-    if not session.load_scene(scene_path):
+    scene_guid = _player_initial_scene_name
+    print(f"INFERNUX_WEB_SCENE_LOADING scene={scene_guid}")
+    # Keep the build-authored GUID authoritative across the runtime scene
+    # boundary.  The cooked path retained above is only for host-owned JSON
+    # inspection (for example the RenderStack bootstrap); PlayerSceneService
+    # resolves this GUID exactly once through RuntimeAssetCatalog.
+    if not session.load_scene(scene_guid):
         raise RuntimeError(
             "Web Player could not load its initial scene: "
-            f"{session.last_scene_error or scenes[0]}"
+            f"{session.last_scene_error or scene_guid}"
         )
     active_scene = scene_manager.get_active_scene()
     if active_scene is None:
@@ -597,7 +659,7 @@ def _prepare_player_runtime() -> None:
     print(
         "INFERNUX_WEB_SCENE_READY "
         f"assets={_player_asset_count} types={_player_type_count} "
-        f"objects={len(active_scene.get_all_objects())} scene={scenes[0]}"
+        f"objects={len(active_scene.get_all_objects())} scene={scene_guid}"
     )
 
 
@@ -982,7 +1044,7 @@ def _iter_web_render_effects(
         else getattr(reference, "path_hint", "")
     )
     path = _web_render_effect_path(guid, path_hint)
-    identity = guid.casefold() or os.path.normcase(os.path.abspath(path))
+    identity = guid.casefold()
     if not path or identity in trail:
         return
     with open(path, encoding="utf-8") as stream:
@@ -1166,24 +1228,24 @@ class _WebScreenUITextureCache:
     def has_pending(self) -> bool:
         return bool(self._pending)
 
-    def get(self, identifier: str) -> int:
-        identifier = str(identifier or "")
-        if not identifier or identifier in self._failed:
+    def get(self, source: Any) -> int:
+        guid = str(getattr(source, "guid", source) or "").strip()
+        if not guid or guid in self._failed:
             return 0
-        ready = self._textures.get(identifier)
+        ready = self._textures.get(guid)
         if ready:
             return ready
-        resolved = int(self._host.screen_ui_resolve_texture(identifier))
+        resolved = int(self._host.screen_ui_resolve_texture(guid))
         if resolved > 0:
-            self._textures[identifier] = resolved
-            self._pending.discard(identifier)
+            self._textures[guid] = resolved
+            self._pending.discard(guid)
             self.generation += 1
             return resolved
         if resolved < 0:
-            self._failed.add(identifier)
-            self._pending.discard(identifier)
+            self._failed.add(guid)
+            self._pending.discard(guid)
         else:
-            self._pending.add(identifier)
+            self._pending.add(guid)
         return 0
 
     def poll(self) -> None:

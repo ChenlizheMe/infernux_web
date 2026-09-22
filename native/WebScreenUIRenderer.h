@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace infernux
 {
@@ -40,10 +41,12 @@ class WebScreenUIRenderer final
                   bool mirrorV, float rounding);
     void AddText(int list, float minX, float minY, float maxX, float maxY, const std::string &text, float r, float g,
                  float b, float a, float alignX, float alignY, float fontSize, float wrapWidth, float rotation,
-                 bool mirrorH, bool mirrorV, const std::string &fontPath, float lineHeight, float letterSpacing);
+                 bool mirrorH, bool mirrorV, const std::string &fontPath, float lineHeight, float letterSpacing,
+                 bool clip, const std::vector<std::string> &fallbackFontPaths = {});
     [[nodiscard]] std::pair<float, float> MeasureText(const std::string &text, float fontSize, float wrapWidth,
                                                       const std::string &fontPath, float lineHeight,
-                                                      float letterSpacing) const;
+                                                      float letterSpacing,
+                                                      const std::vector<std::string> &fallbackFontPaths = {}) const;
     [[nodiscard]] uint64_t UploadTexture(const TextureCpuData &texture, uint64_t replaceTextureId = 0);
     void ReleaseTexture(uint64_t textureId);
 

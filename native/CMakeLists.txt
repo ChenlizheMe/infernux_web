@@ -10,6 +10,14 @@ set(INFERNUX_WEB_CPYTHON_SOURCE "" CACHE PATH
     "CPython 3.13 source directory")
 set(INFERNUX_WEB_CPYTHON_BUILD "" CACHE PATH
     "Configured CPython 3.13 emscripten-browser build directory")
+set(INFERNUX_WEB_PYTHON_RUNTIME_MANIFEST "" CACHE FILEPATH
+    "Audited CPython/Emscripten package-closure manifest")
+set(INFERNUX_WEB_NUMPY_PAYLOAD_ROOT "" CACHE PATH
+    "Exact NumPy static archives, registration source, and preload tree")
+set(INFERNUX_WEB_HOST_PYTHON "" CACHE FILEPATH
+    "Absolute host Python used by Web configure/build tools")
+set(INFERNUX_WEB_PLAYER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/publish/player" CACHE PATH
+    "Build-tree destination for the precompiled Web Player payload")
 set(INFERNUX_ENGINE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." CACHE PATH
     "Infernux source directory providing the backend-neutral RHI contract")
 option(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE
@@ -33,10 +41,80 @@ endif()
 foreach(_required
         INFERNUX_WEB_CPYTHON_SOURCE
         INFERNUX_WEB_CPYTHON_BUILD
-        INFERNUX_ENGINE_SOURCE_ROOT)
+        INFERNUX_ENGINE_SOURCE_ROOT
+        INFERNUX_WEB_NUMPY_PAYLOAD_ROOT)
     if(NOT IS_DIRECTORY "${${_required}}")
         message(FATAL_ERROR "${_required} must name an existing directory")
     endif()
+endforeach()
+if(NOT IS_ABSOLUTE "${INFERNUX_WEB_HOST_PYTHON}" OR
+   NOT EXISTS "${INFERNUX_WEB_HOST_PYTHON}")
+    message(FATAL_ERROR
+        "INFERNUX_WEB_HOST_PYTHON must name an existing absolute interpreter")
+endif()
+if(NOT IS_ABSOLUTE "${INFERNUX_WEB_PYTHON_RUNTIME_MANIFEST}" OR
+   NOT EXISTS "${INFERNUX_WEB_PYTHON_RUNTIME_MANIFEST}")
+    message(FATAL_ERROR
+        "INFERNUX_WEB_PYTHON_RUNTIME_MANIFEST must name an existing absolute file")
+endif()
+file(READ "${INFERNUX_WEB_PYTHON_RUNTIME_MANIFEST}" _python_runtime_manifest)
+string(JSON _python_runtime_manifest_type ERROR_VARIABLE _python_runtime_manifest_error
+    TYPE "${_python_runtime_manifest}")
+if(_python_runtime_manifest_error OR
+   NOT _python_runtime_manifest_type STREQUAL "OBJECT")
+    message(FATAL_ERROR
+        "INFERNUX_WEB_PYTHON_RUNTIME_MANIFEST must contain one JSON object")
+endif()
+execute_process(
+    COMMAND "${INFERNUX_WEB_HOST_PYTHON}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../package/editor/infernux_web/native_payload.py"
+        --verify-python-package-payload "${INFERNUX_WEB_NUMPY_PAYLOAD_ROOT}"
+        --runtime-manifest "${INFERNUX_WEB_PYTHON_RUNTIME_MANIFEST}"
+        --package numpy
+    RESULT_VARIABLE _python_runtime_validation_result
+    ERROR_VARIABLE _python_runtime_validation_error
+)
+if(NOT _python_runtime_validation_result EQUAL 0)
+    message(FATAL_ERROR
+        "Web Python runtime manifest validation failed: ${_python_runtime_validation_error}")
+endif()
+
+set(_numpy_static_manifest
+    "${INFERNUX_WEB_NUMPY_PAYLOAD_ROOT}/numpy_static_link.json")
+set(_numpy_static_registry
+    "${INFERNUX_WEB_NUMPY_PAYLOAD_ROOT}/numpy_builtin_registry.c")
+set(_numpy_site_packages
+    "${INFERNUX_WEB_NUMPY_PAYLOAD_ROOT}/site-packages")
+foreach(_required_file _numpy_static_manifest _numpy_static_registry)
+    if(NOT EXISTS "${${_required_file}}")
+        message(FATAL_ERROR "Missing NumPy static payload file: ${${_required_file}}")
+    endif()
+endforeach()
+if(NOT IS_DIRECTORY "${_numpy_site_packages}/numpy")
+    message(FATAL_ERROR "NumPy preload tree is missing from the static payload")
+endif()
+file(GLOB_RECURSE _numpy_dynamic_payload_files LIST_DIRECTORIES FALSE
+    "${INFERNUX_WEB_NUMPY_PAYLOAD_ROOT}/*.so"
+    "${INFERNUX_WEB_NUMPY_PAYLOAD_ROOT}/*.wasm")
+if(_numpy_dynamic_payload_files)
+    message(FATAL_ERROR
+        "NumPy static payload contains forbidden dynamic files: ${_numpy_dynamic_payload_files}")
+endif()
+file(READ "${_numpy_static_manifest}" _numpy_static_document)
+string(JSON _numpy_archive_count ERROR_VARIABLE _numpy_static_error
+    LENGTH "${_numpy_static_document}" archives)
+if(_numpy_static_error OR _numpy_archive_count LESS 13)
+    message(FATAL_ERROR "NumPy static link manifest is invalid: ${_numpy_static_error}")
+endif()
+set(_numpy_static_archives)
+math(EXPR _numpy_archive_last "${_numpy_archive_count} - 1")
+foreach(_index RANGE 0 ${_numpy_archive_last})
+    string(JSON _relative_archive GET "${_numpy_static_document}" archives ${_index})
+    set(_archive "${INFERNUX_WEB_NUMPY_PAYLOAD_ROOT}/${_relative_archive}")
+    if(NOT EXISTS "${_archive}")
+        message(FATAL_ERROR "NumPy static archive is missing: ${_archive}")
+    endif()
+    list(APPEND _numpy_static_archives "${_archive}")
 endforeach()
 
 set(_python_library "${INFERNUX_WEB_CPYTHON_BUILD}/libpython3.13.a")
@@ -121,10 +199,12 @@ endif()
 
 add_executable(InfernuxWebPlayerHost
     main.cpp
+    "${_numpy_static_registry}"
     InfernuxWebHostModule.cpp
     WebGpuRhiDevice.cpp
     WebParticleRuntime.cpp
     WebPostProcessRenderer.cpp
+    WebIndexPacking.cpp
     WebSceneRenderer.cpp
     WebScreenUIRenderer.cpp
     "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/function/renderer/particle/ParticleGpuContactRuntime.cpp"
@@ -156,6 +236,20 @@ set_target_properties(InfernuxWebPlayerHost PROPERTIES
 set_property(TARGET InfernuxWebPlayerHost APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/bootstrap.py"
 )
+file(GLOB_RECURSE _numpy_payload_files CONFIGURE_DEPENDS LIST_DIRECTORIES FALSE
+    "${INFERNUX_WEB_NUMPY_PAYLOAD_ROOT}/*")
+set_property(TARGET InfernuxWebPlayerHost APPEND PROPERTY LINK_DEPENDS
+    ${_numpy_payload_files}
+)
+add_custom_target(infernux_web_verify_python_runtime ALL
+    COMMAND "${INFERNUX_WEB_HOST_PYTHON}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../package/editor/infernux_web/native_payload.py"
+        --verify-python-package-payload "${INFERNUX_WEB_NUMPY_PAYLOAD_ROOT}"
+        --runtime-manifest "${INFERNUX_WEB_PYTHON_RUNTIME_MANIFEST}"
+        --package numpy
+    VERBATIM
+)
+add_dependencies(InfernuxWebPlayerHost infernux_web_verify_python_runtime)
 
 target_include_directories(InfernuxWebPlayerHost PRIVATE
     "${INFERNUX_WEB_CPYTHON_SOURCE}/Include"
@@ -176,6 +270,9 @@ target_sources(InfernuxWebPlayerHost PRIVATE
     "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui/imgui_widgets.cpp"
 )
 target_link_libraries(InfernuxWebPlayerHost PRIVATE
+    "-Wl,--start-group"
+    ${_numpy_static_archives}
+    "-Wl,--end-group"
     "${_python_library}"
     "${_python_expat}"
     "${_python_mpdecimal}"
@@ -198,7 +295,8 @@ target_compile_definitions(InfernuxWebPlayerHost PRIVATE
 if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
    INFERNUX_WEB_LINK_ENGINE_RUNTIME)
     execute_process(
-        COMMAND python -c "import pybind11; print(pybind11.get_include())"
+        COMMAND "${INFERNUX_WEB_HOST_PYTHON}"
+            -c "import pybind11; print(pybind11.get_include())"
         OUTPUT_VARIABLE _web_pybind11_include
         OUTPUT_STRIP_TRAILING_WHITESPACE
         RESULT_VARIABLE _web_pybind11_result
@@ -383,13 +481,18 @@ target_link_options(InfernuxWebPlayerHost PRIVATE
     "-sEXIT_RUNTIME=0"
     "-sEXPORTED_RUNTIME_METHODS=['ccall','FS','addRunDependency','removeRunDependency','abort']"
     "--preload-file=${_python_assets}@/usr/local"
+    "--preload-file=${_numpy_site_packages}@/usr/local/lib/python3.13/site-packages"
     "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/bootstrap.py@/infernux/bootstrap.py"
 )
 
-# CMake owns publication into this plugin. Project exports only consume these files.
-set(_web_player_destination "${CMAKE_CURRENT_SOURCE_DIR}/../package/editor/infernux_web/player")
+# Keep generated Player payloads outside the source tree. Release packaging
+# consumes this directory explicitly instead of relying on source mutation.
+if(NOT IS_ABSOLUTE "${INFERNUX_WEB_PLAYER_OUTPUT_DIR}")
+    message(FATAL_ERROR "INFERNUX_WEB_PLAYER_OUTPUT_DIR must be absolute")
+endif()
+set(_web_player_destination "${INFERNUX_WEB_PLAYER_OUTPUT_DIR}")
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Player.inxmanifest" CONTENT
-"{\"$schema\":\"infernux.web_player\",\"engine\":\"0.4.0\",\"platform\":\"web\",\"architecture\":\"wasm32\",\"python_abi\":\"cp313\",\"configuration\":\"$<CONFIG>\"}\n")
+"{\"$schema\":\"infernux.web_player\",\"engine\":\"0.4.0\",\"platform\":\"web\",\"architecture\":\"wasm32\",\"python_abi\":\"cp313\",\"configuration\":\"$<CONFIG>\",\"python_runtime\":${_python_runtime_manifest}}\n")
 add_custom_target(prebuild_web_player
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${_web_player_destination}"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -399,10 +502,5 @@ add_custom_target(prebuild_web_player
         "${CMAKE_CURRENT_BINARY_DIR}/Player.inxmanifest"
         "${_web_player_destination}"
     DEPENDS InfernuxWebPlayerHost
-    VERBATIM
-)
-add_custom_target(package_web_plugin
-    COMMAND python "${CMAKE_CURRENT_SOURCE_DIR}/../release.py" v0.2.0
-    DEPENDS prebuild_web_player
     VERBATIM
 )

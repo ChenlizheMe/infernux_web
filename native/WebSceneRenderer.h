@@ -1,6 +1,9 @@
 #pragma once
 
+#include "WebIndexPacking.h"
+
 #include <function/renderer/RenderWorld.h>
+#include <function/resources/InxMaterial/MaterialProperty.h>
 #include <function/scene/SceneRenderExtractor.h>
 #include <webgpu/webgpu_cpp.h>
 
@@ -55,6 +58,7 @@ class WebSceneRenderer final
         float normal[3];
         float tangent[4];
         float uv[2];
+        float uv1[2];
         float color[4];
         float emission[4];
         // x = metallic, y = smoothness, z = occlusion, w = specular highlights.
@@ -62,12 +66,19 @@ class WebSceneRenderer final
         // x = 0 PBR / 1 unlit / 2 toon, y/z = toon threshold/softness,
         // w = alpha-clip threshold or -1 when clipping is disabled.
         float surface[4];
+        // Per-texture UV set: base color, metallic, smoothness, occlusion.
+        float textureUvSets0[4];
+        // x = normal UV set, y = emission UV set.
+        float textureUvSets1[2];
+        float metallicChannels[4];
+        float smoothnessChannels[4];
+        // x = smoothness-from-roughness, y = occlusion strength.
+        float materialSampling[2];
     };
 
     struct WebDrawRange
     {
-        uint32_t firstIndex = 0;
-        uint32_t indexCount = 0;
+        WebPackedIndexRange indices;
         bool transparent = false;
         bool castsShadows = true;
         bool line = false;
@@ -130,12 +141,16 @@ class WebSceneRenderer final
     bool CreatePipelines();
     bool CreateShadowResources();
     bool CreateMaterialTextureResources();
-    [[nodiscard]] GPUTexture ResolveMaterialTexture(const std::string &guid, const GPUTexture &fallback);
+    [[nodiscard]] GPUTexture ResolveMaterialTexture(const std::string &guid,
+                                                     const MaterialTextureSampler &sampler,
+                                                     const GPUTexture &fallback);
     [[nodiscard]] wgpu::BindGroup ResolveMaterialTextureSet(const std::shared_ptr<InxMaterial> &material);
-    [[nodiscard]] wgpu::BindGroup CreateMaterialTextureGroup(const std::array<GPUTexture, 5> &textures);
+    [[nodiscard]] wgpu::BindGroup CreateMaterialTextureGroup(const std::array<GPUTexture, 6> &textures);
     [[nodiscard]] GPUTexture UploadMaterialTexture(const TextureCpuData &texture, const std::string &filterMode,
-                                                   const std::string &wrapMode, int anisoLevel);
+                                                   const std::string &wrapMode, int anisoLevel,
+                                                   const MaterialTextureSampler &sampler = {});
     bool EnsureBuffer(wgpu::Buffer &buffer, uint64_t &capacity, uint64_t required, wgpu::BufferUsage usage);
+    [[nodiscard]] bool BindIndexStream(wgpu::RenderPassEncoder pass, MeshIndexFormat format) const;
     bool BuildFrame(uint32_t width, uint32_t height);
     void ReportFrameIssue(const char *issue);
 
@@ -160,12 +175,14 @@ class WebSceneRenderer final
     uint64_t m_materialTextureGeneration = 1;
     wgpu::Buffer m_cameraBuffer;
     wgpu::Buffer m_vertexBuffer;
-    wgpu::Buffer m_indexBuffer;
+    wgpu::Buffer m_indexBuffer16;
+    wgpu::Buffer m_indexBuffer32;
     wgpu::Texture m_shadowTexture;
     wgpu::TextureView m_shadowView;
     wgpu::Sampler m_shadowSampler;
     uint64_t m_vertexCapacity = 0;
-    uint64_t m_indexCapacity = 0;
+    uint64_t m_indexCapacity16 = 0;
+    uint64_t m_indexCapacity32 = 0;
     wgpu::Texture m_depthTexture;
     wgpu::TextureView m_depthView;
     uint32_t m_depthWidth = 0;
@@ -175,10 +192,14 @@ class WebSceneRenderer final
     SceneRenderExtractor m_extractor;
     RenderWorldSnapshot m_world;
     std::vector<WebVertex> m_vertices;
-    std::vector<uint32_t> m_indices;
+    WebPackedIndexStreams m_indexStreams;
     std::vector<WebDrawRange> m_drawRanges;
     CameraData m_cameraData;
     std::string m_lastFrameIssue;
+    size_t m_residentSceneCount = 0;
+    size_t m_residentRendererCount = 0;
+    size_t m_residentLightCount = 0;
+    uint64_t m_activeWorldId = 0;
     bool m_reportedFirstFrame = false;
     bool m_reportedLineDraw = false;
     bool m_framePrepared = false;

@@ -57,18 +57,25 @@ jobs:
           sudo apt-get install --yes --no-install-recommends ninja-build pkg-config libssl-dev libffi-dev zlib1g-dev libbz2-dev libsqlite3-dev liblzma-dev glslang-tools
           python -m pip install cmake pybind11
           engine/scripts/setup/build_web_toolchain.sh "$PWD/engine/out/toolchains/web"
-      - name: Publish precompiled browser runtime directly into the plugin
+          bash engine/external/plugins/infernux_web/native/python_runtime/build_numpy_static_runtime.sh \
+            --root "$PWD/engine/out/build/web-numpy-static-runtime" \
+            --host-python "$CONDA_PREFIX/bin/python"
+      - name: Publish precompiled browser runtime into the build tree
         run: |
           conda activate infernux
           source engine/out/toolchains/web/emsdk/emsdk_env.sh
           python engine/external/plugins/infernux_web/native/build.py \
             --emsdk engine/out/toolchains/web/emsdk \
             --cpython-source engine/out/toolchains/web/src/Python-3.13.15 \
+            --python-runtime-manifest engine/out/build/web-numpy-static-runtime/runtime/runtime-manifest.json \
+            --numpy-payload-root engine/out/build/web-numpy-static-runtime/runtime/payload \
+            --host-python "$CONDA_PREFIX/bin/python" \
+            --player-output engine/out/build/web-precompiled-player/publish/player \
             --build-root engine/out/build/web-precompiled-player
       - uses: actions/upload-artifact@v4
         with:
           name: web-player
-          path: engine/external/plugins/infernux_web/package/editor/infernux_web/player/
+          path: engine/out/build/web-precompiled-player/publish/player/
           if-no-files-found: error
 
   shader-tools:
@@ -113,14 +120,15 @@ jobs:
           python -m pip install cmake ninja
           python engine/external/plugins/infernux_web/native/prepare_dawn.py engine/out/toolchains/dawn
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake -S engine/external/plugins/infernux_web/native/tools -B engine/out/build/web-shader-tools -G Ninja "-DINFERNUX_DAWN_SOURCE=$PWD/engine/out/toolchains/dawn"
+          $toolsOutput = "$PWD/engine/out/build/web-shader-tools/publish/tools"
+          cmake -S engine/external/plugins/infernux_web/native/tools -B engine/out/build/web-shader-tools -G Ninja "-DINFERNUX_DAWN_SOURCE=$PWD/engine/out/toolchains/dawn" "-DINFERNUX_WEB_TOOLS_OUTPUT_DIR=$toolsOutput"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build engine/out/build/web-shader-tools --target prebuild_web_tools --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: web-tools-${{ runner.os }}
-          path: engine/external/plugins/infernux_web/package/editor/infernux_web/tools/
+          path: engine/out/build/web-shader-tools/publish/tools/
           if-no-files-found: error
 
   release:
@@ -136,14 +144,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: web-player
-          path: package/editor/infernux_web/player
+          path: artifacts/web-player
       - uses: actions/download-artifact@v4
         with:
           pattern: web-tools-*
           merge-multiple: true
-          path: package/editor/infernux_web/tools
+          path: artifacts/web-tools
       - name: Build the complete InxPackage
-        run: python release.py v0.2.0
+        run: python release.py v0.2.0 --player-payload artifacts/web-player --tools-payload artifacts/web-tools
       - uses: actions/upload-artifact@v4
         with:
           name: plugin-package

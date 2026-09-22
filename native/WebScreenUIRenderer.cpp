@@ -364,30 +364,38 @@ void WebScreenUIRenderer::AddImage(int list, uint64_t textureId, float minX, flo
 void WebScreenUIRenderer::AddText(int list, float minX, float minY, float maxX, float maxY, const std::string &text,
                                   float r, float g, float b, float a, float alignX, float alignY, float fontSize,
                                   float wrapWidth, float rotation, bool mirrorH, bool mirrorV,
-                                  const std::string &fontPath, float lineHeight, float letterSpacing)
+                                  const std::string &fontPath, float lineHeight, float letterSpacing, bool clip,
+                                  const std::vector<std::string> &fallbackFontPaths)
 {
     ImDrawList *draw = DrawList(list);
     if (!draw || text.empty())
         return;
     ImGui::SetCurrentContext(m_context);
     const textlayout::TextLayoutResult layout = textlayout::LayoutText(
-        {text, fontPath, textlayout::ResolveFontSize(fontSize), wrapWidth, lineHeight, letterSpacing});
+        {text, fontPath, textlayout::ResolveFontSize(fontSize), wrapWidth, lineHeight, letterSpacing,
+         fallbackFontPaths});
     const int firstVertex = draw->VtxBuffer.Size;
+    if (clip)
+        draw->PushClipRect({minX, minY}, {maxX, maxY}, true);
     draw->PushTextureID(ImGui::GetIO().Fonts->TexRef);
     textlayout::RenderTextBox(draw, minX, minY, maxX, maxY, layout, ImGui::ColorConvertFloat4ToU32({r, g, b, a}),
                               alignX, alignY, letterSpacing);
     draw->PopTextureID();
+    if (clip)
+        draw->PopClipRect();
     m_fontAtlasDirty = true;
     TransformVertices(*draw, firstVertex, minX, minY, maxX, maxY, rotation, mirrorH, mirrorV);
 }
 
 std::pair<float, float> WebScreenUIRenderer::MeasureText(const std::string &text, float fontSize, float wrapWidth,
                                                          const std::string &fontPath, float lineHeight,
-                                                         float letterSpacing) const
+                                                         float letterSpacing,
+                                                         const std::vector<std::string> &fallbackFontPaths) const
 {
     ImGui::SetCurrentContext(m_context);
     const textlayout::TextLayoutResult layout = textlayout::LayoutText(
-        {text, fontPath, textlayout::ResolveFontSize(fontSize), wrapWidth, lineHeight, letterSpacing});
+        {text, fontPath, textlayout::ResolveFontSize(fontSize), wrapWidth, lineHeight, letterSpacing,
+         fallbackFontPaths});
     return {layout.totalWidth, layout.totalHeight};
 }
 

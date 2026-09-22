@@ -35,6 +35,8 @@
 #include <emscripten.h>
 #include <emscripten/html5.h>
 
+extern "C" int InfernuxRegisterNumPyBuiltins(void);
+
 // JavaScript bodies are not C++: clang-format splits strict equality tokens.
 // clang-format off
 EM_JS(double, InfernuxWebAcceptanceFixedDelta, (), {
@@ -271,6 +273,22 @@ bool VerifyPreloadedRuntime()
         return false;
     }
     std::printf("INFERNUX_WEB_PYTHON_ARCHIVE_READY bytes=%ld\n", byteSize);
+    return true;
+}
+
+bool VerifyNumericalRuntime()
+{
+    static constexpr char contract[] = "import os, sys\n"
+                                       "import numpy as _infernux_numpy\n"
+                                       "assert _infernux_numpy.__version__ == '2.2.5'\n"
+                                       "assert sys.platform == 'emscripten'\n"
+                                       "assert tuple(sys._emscripten_info.emscripten_version) == (4, 0, 10)\n"
+                                       "assert os.uname().machine == 'wasm32'\n";
+    if (PyRun_SimpleString(contract) != 0) {
+        PrintPythonError("numerical-runtime");
+        return false;
+    }
+    std::printf("INFERNUX_WEB_NUMPY_READY version=2.2.5 abi=cp313 platform=emscripten-4.0.10-wasm32\n");
     return true;
 }
 
@@ -822,6 +840,10 @@ bool InitializePython()
     if (!infernux::JobSystem::IsAvailable())
         infernux::JobSystem::InitializeInline();
 #endif
+    if (InfernuxRegisterNumPyBuiltins() != 0) {
+        std::fprintf(stderr, "INFERNUX_WEB_NUMPY_REGISTRATION_FAILED\n");
+        return false;
+    }
     if (PyImport_AppendInittab("_InfernuxWebHost", &PyInit__InfernuxWebHost) == -1) {
         std::fprintf(stderr, "INFERNUX_WEB_HOST_MODULE_REGISTRATION_FAILED\n");
         return false;
@@ -834,6 +856,8 @@ bool InitializePython()
 #endif
     Py_Initialize();
     if (!Py_IsInitialized())
+        return false;
+    if (!VerifyNumericalRuntime())
         return false;
 #if defined(INFERNUX_WEB_ENGINE_RUNTIME)
     if (PyRun_SimpleString("import _Infernux\n"

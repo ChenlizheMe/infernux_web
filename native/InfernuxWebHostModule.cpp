@@ -35,6 +35,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
@@ -436,6 +437,42 @@ double TupleNumber(PyObject *arguments, Py_ssize_t index)
     return PyFloat_AsDouble(PyTuple_GetItem(arguments, index));
 }
 
+bool ParseFallbackFontPaths(PyObject *value, std::vector<std::string> &paths)
+{
+    if (value == nullptr)
+        return true;
+    if (PyUnicode_Check(value) || PyBytes_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "fallback font paths must be a sequence of strings");
+        return false;
+    }
+    PyObject *sequence = PySequence_Fast(value, "fallback font paths must be a sequence");
+    if (sequence == nullptr)
+        return false;
+    const Py_ssize_t count = PySequence_Fast_GET_SIZE(sequence);
+    if (count == 0) {
+        Py_DECREF(sequence);
+        return true;
+    }
+    paths.reserve(static_cast<size_t>(count));
+    for (Py_ssize_t index = 0; index < count; ++index) {
+        PyObject *item = PySequence_Fast_GET_ITEM(sequence, index);
+        Py_ssize_t size = 0;
+        const char *path = PyUnicode_AsUTF8AndSize(item, &size);
+        if (path == nullptr) {
+            Py_DECREF(sequence);
+            return false;
+        }
+        if (size <= 0) {
+            Py_DECREF(sequence);
+            PyErr_SetString(PyExc_ValueError, "fallback font paths must not contain an empty entry");
+            return false;
+        }
+        paths.emplace_back(path, static_cast<size_t>(size));
+    }
+    Py_DECREF(sequence);
+    return true;
+}
+
 PyObject *ScreenUIAddImage(PyObject *, PyObject *arguments)
 {
     if (PyTuple_Size(arguments) != 18) {
@@ -474,6 +511,8 @@ PyObject *ScreenUIAddText(PyObject *, PyObject *arguments)
     const bool mirrorH = PyObject_IsTrue(PyTuple_GetItem(arguments, 15)) != 0;
     const bool mirrorV = PyObject_IsTrue(PyTuple_GetItem(arguments, 16)) != 0;
     const char *fontPath = PyUnicode_AsUTF8(PyTuple_GetItem(arguments, 17));
+    const bool clip = argumentCount >= 21 && PyObject_IsTrue(PyTuple_GetItem(arguments, 20)) != 0;
+    std::vector<std::string> fallbackFontPaths;
     double values[15]{};
     for (int index = 0; index < 4; ++index)
         values[index] = TupleNumber(arguments, index + 1);
@@ -481,7 +520,8 @@ PyObject *ScreenUIAddText(PyObject *, PyObject *arguments)
         values[index] = TupleNumber(arguments, index + 2);
     values[13] = TupleNumber(arguments, 18);
     values[14] = TupleNumber(arguments, 19);
-    if (PyErr_Occurred() || !text || !fontPath)
+    if (PyErr_Occurred() || !text || !fontPath ||
+        (argumentCount == 22 && !ParseFallbackFontPaths(PyTuple_GetItem(arguments, 21), fallbackFontPaths)))
         return nullptr;
     if (g_screenUIRenderer)
         g_screenUIRenderer->AddText(
@@ -490,7 +530,7 @@ PyObject *ScreenUIAddText(PyObject *, PyObject *arguments)
             static_cast<float>(values[6]), static_cast<float>(values[7]), static_cast<float>(values[8]),
             static_cast<float>(values[9]), static_cast<float>(values[10]), static_cast<float>(values[11]),
             static_cast<float>(values[12]), mirrorH, mirrorV, fontPath, static_cast<float>(values[13]),
-            static_cast<float>(values[14]));
+            static_cast<float>(values[14]), clip, fallbackFontPaths);
     Py_RETURN_NONE;
 }
 
@@ -502,13 +542,18 @@ PyObject *ScreenUIMeasureText(PyObject *, PyObject *arguments)
     double wrapWidth = 0.0;
     double lineHeight = 0.0;
     double letterSpacing = 0.0;
-    if (!PyArg_ParseTuple(arguments, "sddsdd:screen_ui_measure_text", &text, &fontSize, &wrapWidth, &fontPath,
-                          &lineHeight, &letterSpacing))
+    PyObject *fallbackFontPathsObject = nullptr;
+    if (!PyArg_ParseTuple(arguments, "sddsdd|O:screen_ui_measure_text", &text, &fontSize, &wrapWidth, &fontPath,
+                          &lineHeight, &letterSpacing, &fallbackFontPathsObject))
+        return nullptr;
+    std::vector<std::string> fallbackFontPaths;
+    if (!ParseFallbackFontPaths(fallbackFontPathsObject, fallbackFontPaths))
         return nullptr;
     const auto measured = g_screenUIRenderer ? g_screenUIRenderer->MeasureText(text, static_cast<float>(fontSize),
                                                                                static_cast<float>(wrapWidth), fontPath,
                                                                                static_cast<float>(lineHeight),
-                                                                               static_cast<float>(letterSpacing))
+                                                                               static_cast<float>(letterSpacing),
+                                                                               fallbackFontPaths)
                                              : std::pair<float, float>{0.0f, 0.0f};
     return Py_BuildValue("ff", measured.first, measured.second);
 }
@@ -518,20 +563,18 @@ PyObject *ScreenUIResolveTexture(PyObject *, PyObject *arguments)
 #if !defined(INFERNUX_WEB_ENGINE_RUNTIME)
     return PyLong_FromLongLong(-1);
 #else
-    const char *identifier = nullptr;
-    if (!PyArg_ParseTuple(arguments, "s:screen_ui_resolve_texture", &identifier))
+    const char *guidText = nullptr;
+    if (!PyArg_ParseTuple(arguments, "s:screen_ui_resolve_texture", &guidText))
         return nullptr;
-    if (!g_screenUIRenderer || identifier == nullptr || *identifier == '\0')
+    if (!g_screenUIRenderer || guidText == nullptr || *guidText == '\0')
         return PyLong_FromLongLong(-1);
     try {
         auto &registry = infernux::AssetRegistry::Instance();
         auto *database = registry.GetAssetDatabase();
         if (!database)
             return PyLong_FromLongLong(-1);
-        std::string guid(identifier);
+        const std::string guid(guidText);
         if (!database->ContainsGuid(guid))
-            guid = database->GetGuidFromPath(identifier);
-        if (guid.empty())
             return PyLong_FromLongLong(-1);
 
         auto &state = g_screenUITextures[guid];
@@ -562,7 +605,7 @@ PyObject *ScreenUIResolveTexture(PyObject *, PyObject *arguments)
                     static_cast<unsigned long long>(state.textureId));
         return PyLong_FromUnsignedLongLong(state.textureId);
     } catch (const std::exception &error) {
-        std::fprintf(stderr, "INFERNUX_WEB_SCREEN_UI_TEXTURE_FAILED identifier=%s error=%s\n", identifier,
+        std::fprintf(stderr, "INFERNUX_WEB_SCREEN_UI_TEXTURE_FAILED guid=%s error=%s\n", guidText,
                      error.what());
         return PyLong_FromLongLong(-1);
     }

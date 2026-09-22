@@ -30,6 +30,7 @@ from Infernux.engine.build import (
 )
 
 from .doctor import inspect_web_toolchain
+from .native_payload import inspect_python_runtime
 from .capabilities import (
     WEBGPU_CAPABILITY_FILENAME,
     validate_webgpu_capability_inventory,
@@ -48,7 +49,7 @@ _WEB_CAPABILITIES = PlatformCapabilities(
     text_input=True,
     gamepad_input=True,
     python_native_modules=False,
-    numba=False,
+    cpu_jit=False,
     persistent_storage=False,
     features=frozenset(
         {
@@ -154,10 +155,15 @@ class WebPlatformExporter(PlatformExporter):
                 request,
                 default_shell,
             )
-            _reject_unshipped_web_dependencies(request.project_root)
             request.report("prepare", 0, 1, "Preparing Web Player staging")
             _prepare_web_staging(staging)
-            game_name, player_assets = _cook_web_player_assets(request, staging)
+            game_name, player_assets, python_sources = _cook_web_player_assets(
+                request, staging
+            )
+            _reject_unshipped_web_dependencies(
+                python_sources,
+                details.get("player"),
+            )
             _stage_web_branding(player_assets, source_package, game_name)
             _stage_engine_python_package(request, player_assets, source_package)
             _stage_web_shader_sources(request, staging, player_assets, source_package)
@@ -237,6 +243,7 @@ class WebPlatformExporter(PlatformExporter):
                 "abi": "wasm32",
                 "graphics_api": "webgpu",
                 "python": "3.13",
+                "python_runtime": details["player"]["python_runtime"],
                 "scope": "cooked-player",
                 "game": game_name,
                 "asset_revision": asset_revision,
@@ -317,24 +324,40 @@ def _publish_web_player(
 
     output_root = Path(request.output_dir).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
+    staged: dict[str, Path] = {}
+    try:
+        # Copy the complete generation without touching the currently served
+        # one. Versioned resources are committed first and HTML is the final
+        # atomic switch; a failed copy/replace leaves the old entry point and
+        # all resources it names intact.
+        for name in names:
+            source = host_build / name
+            temporary = output_root / f".{name}.{os.getpid()}.{time.time_ns()}.tmp"
+            staged[name] = temporary
+            shutil.copy2(source, temporary)
+        for name in names[1:]:
+            os.replace(staged[name], output_root / name)
+            del staged[name]
+        os.replace(staged[names[0]], output_root / names[0])
+        del staged[names[0]]
+    finally:
+        for temporary in staged.values():
+            temporary.unlink(missing_ok=True)
+
+    # Retire old revisions only after the new HTML points at a complete
+    # generation. Never delete rollback resources before the entry switch.
     for stale in output_root.glob("infernux-player.*"):
         if stale.is_file() and stale.name not in names:
             stale.unlink()
 
-    artifacts = []
-    for name in names:
-        source = host_build / name
-        destination = output_root / name
-        temporary = output_root / f".{name}.tmp"
-        shutil.copy2(source, temporary)
-        os.replace(temporary, destination)
-        artifacts.append(
-            BuildArtifact(
-                str(destination),
-                destination.suffix.lstrip("."),
-                size=destination.stat().st_size,
-            )
+    artifacts = [
+        BuildArtifact(
+            str(output_root / name),
+            (output_root / name).suffix.lstrip("."),
+            size=(output_root / name).stat().st_size,
         )
+        for name in names
+    ]
     template_output = output_root / "web-template"
     template_temporary = output_root / ".web-template.tmp"
     if template_temporary.exists():
@@ -446,7 +469,7 @@ def _web_staging_directory(request: BuildRequest) -> Path:
 def _cook_web_player_assets(
     request: BuildRequest,
     staging: Path,
-) -> tuple[str, Path]:
+) -> tuple[str, Path, tuple[Path, ...]]:
     from Infernux.engine.platform_content_cook import cook_platform_content
 
     cook_root = staging / ".infernux-player-cook"
@@ -459,7 +482,6 @@ def _cook_web_player_assets(
             "entry_point": "infernux-player.html",
             "platform": "web",
             "architecture": "wasm32",
-            "python_jit_fallback": True,
         },
     )
     player_assets = staging / "player-assets"
@@ -468,25 +490,45 @@ def _cook_web_player_assets(
         cooked.data_directory,
         player_assets / cooked.data_directory.name,
     )
-    return cooked.game_name, player_assets
+    return cooked.game_name, player_assets, cooked.python_sources
 
 
-def _reject_unshipped_web_dependencies(project_root: str | Path) -> None:
+def _reject_unshipped_web_dependencies(
+    python_sources: object,
+    player_manifest: object = None,
+) -> None:
     """Fail the Web build before publishing a runtime that cannot import a script.
 
-    The browser Player currently ships CPython and the engine's pure-Python
-    package, but no numerical extension modules.  In particular, NumPy cannot
-    be made usable by copying its desktop files: its native extension ABI is
-    not WASM.  Detect this at build time instead of producing a package that
-    only fails after the first scene loads.
+    Native numerical packages belong to the immutable Player runtime, not the
+    project's Content.inxpkg.  Permit an import only when the inspected Player
+    manifest proves that its complete package is built for the exact Web ABI.
     """
+    provided_imports: set[str] = set()
+    if isinstance(player_manifest, dict):
+        runtime = inspect_python_runtime(player_manifest.get("python_runtime"))
+        for package in runtime["packages"]:
+            provided_imports.update(package["imports"])
+
+    if not isinstance(python_sources, (tuple, list, set, frozenset)):
+        raise TypeError("Web dependency scan requires the frozen Player Python source closure")
+
+    missing: set[str] = set()
     unsupported: set[str] = set()
-    assets = Path(project_root).resolve() / "Assets"
-    for source_path in assets.rglob("*.py") if assets.is_dir() else ():
+    gpu_declarations: dict[str, set[str]] = {}
+    for source_value in python_sources:
+        source_path = Path(source_value).resolve()
+        if not source_path.is_file() or source_path.suffix.casefold() != ".py":
+            raise ValueError(
+                f"Web Player Python source closure contains an invalid file: {source_path}"
+            )
         try:
             tree = ast.parse(source_path.read_text(encoding="utf-8"), str(source_path))
         except (OSError, SyntaxError) as error:
             raise ValueError(f"Web dependency scan failed for {source_path}: {error}") from error
+
+        declarations = _web_gpu_declarations(tree)
+        if declarations:
+            gpu_declarations[str(source_path)] = declarations
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 names = (alias.name.split(".", 1)[0] for alias in node.names)
@@ -494,14 +536,231 @@ def _reject_unshipped_web_dependencies(project_root: str | Path) -> None:
                 names = (node.module.split(".", 1)[0],)
             else:
                 continue
-            unsupported.update(name for name in names if name in {"numpy", "numba", "llvmlite"})
-    if unsupported:
-        names = ", ".join(sorted(unsupported))
+            for name in names:
+                if name in {"numba", "llvmlite"}:
+                    unsupported.add(name)
+                elif name == "numpy" and name not in provided_imports:
+                    missing.add(name)
+    if gpu_declarations:
+        names = sorted(
+            {name for declarations in gpu_declarations.values() for name in declarations}
+        )
+        sources = ", ".join(sorted(gpu_declarations))
         raise ValueError(
-            "Web Player cannot package native numerical dependencies yet: "
-            f"{names}. A WASM-compatible dependency payload is required; "
+            "Web Player cannot execute source-authored GPU compute declarations: "
+            + ", ".join(names)
+            + f" (source: {sources})"
+            + ". The Web target has no Python-to-WebGPU kernel compiler; "
+            "shipping these declarations as ordinary Python would change their semantics."
+        )
+    if unsupported or missing:
+        unavailable = sorted(unsupported | missing)
+        names = ", ".join(unavailable)
+        reason = (
+            "unsupported on the Web runtime"
+            if unsupported
+            else "missing from the inspected Web runtime package closure"
+        )
+        raise ValueError(
+            "Web Player cannot package native numerical dependencies: "
+            f"{names} ({reason}). An exact CPython/Emscripten-compatible "
+            "dependency payload is required; "
             "the build was stopped before publishing an unusable Player."
         )
+
+
+def _web_gpu_declarations(tree: ast.Module) -> set[str]:
+    """Resolve GPU decorator aliases conservatively without executing code."""
+
+    gpu_decorators = {
+        "infernux.compute.kernel",
+        "infernux.compute.function",
+    }
+    declarations: set[str] = set()
+
+    class Scope:
+        def __init__(self, parent: "Scope | None" = None) -> None:
+            self.parent = parent
+            self.aliases: dict[str, frozenset[str]] = {}
+            self.observed: dict[str, frozenset[str]] = {}
+
+        def clone(self) -> "Scope":
+            result = Scope(self.parent)
+            result.aliases = dict(self.aliases)
+            return result
+
+        def merge(self, branches: list["Scope"]) -> None:
+            names = set().union(*(branch.aliases for branch in branches))
+            self.aliases = {
+                name: frozenset().union(
+                    *(branch.lookup(name) for branch in branches)
+                )
+                for name in names
+            }
+            prior_observed = dict(self.observed)
+            observed_names = set(prior_observed).union(
+                *(branch.observed for branch in branches)
+            )
+            self.observed = {
+                name: prior_observed.get(name, frozenset()) | frozenset().union(
+                    *(branch.observed.get(name, frozenset()) for branch in branches)
+                )
+                for name in observed_names
+            }
+
+        def bind_name(self, name: str, candidates: frozenset[str]) -> None:
+            resolved = candidates or frozenset({name})
+            self.aliases[name] = resolved
+            self.observed[name] = self.observed.get(name, frozenset()) | resolved
+
+        def promote_observed(self) -> None:
+            for name, candidates in self.observed.items():
+                self.aliases[name] = self.lookup(name) | candidates
+
+        def lookup(self, name: str) -> frozenset[str]:
+            if name in self.aliases:
+                return self.aliases[name]
+            if self.parent is not None:
+                return self.parent.lookup(name)
+            return frozenset({name})
+
+        def canonical(self, expression: ast.expr) -> frozenset[str]:
+            if isinstance(expression, ast.Name):
+                return self.lookup(expression.id)
+            if isinstance(expression, ast.Attribute):
+                return frozenset(
+                    f"{owner}.{expression.attr}"
+                    for owner in self.canonical(expression.value)
+                    if owner
+                )
+            return frozenset()
+
+        def bind(self, target: ast.expr, canonical: frozenset[str]) -> None:
+            if isinstance(target, ast.Name):
+                self.bind_name(target.id, canonical)
+
+    def bind_assignment(scope: Scope, target: ast.expr, value: ast.expr) -> None:
+        if isinstance(target, (ast.Tuple, ast.List)) and isinstance(
+            value, (ast.Tuple, ast.List)
+        ):
+            for item, item_value in zip(target.elts, value.elts):
+                bind_assignment(scope, item, item_value)
+            return
+        scope.bind(target, scope.canonical(value))
+
+    def scan_expression_aliases(expression: ast.expr, scope: Scope) -> None:
+        for node in ast.walk(expression):
+            if isinstance(node, ast.NamedExpr):
+                bind_assignment(scope, node.target, node.value)
+
+    def scan_body(statements: list[ast.stmt], scope: Scope) -> None:
+        for statement in statements:
+            if isinstance(statement, ast.Import):
+                for alias in statement.names:
+                    local = alias.asname or alias.name.split(".", 1)[0]
+                    scope.bind_name(local, frozenset(
+                        {alias.name if alias.asname else local}
+                    ))
+                continue
+            if (
+                isinstance(statement, ast.ImportFrom)
+                and statement.level == 0
+                and statement.module
+            ):
+                for alias in statement.names:
+                    if alias.name == "*":
+                        module = statement.module.casefold()
+                        if module == "infernux":
+                            scope.bind_name("compute", frozenset(
+                                {f"{statement.module}.compute"}
+                            ))
+                        elif module == "infernux.compute":
+                            scope.bind_name("kernel", frozenset(
+                                {f"{statement.module}.kernel"}
+                            ))
+                            scope.bind_name("function", frozenset(
+                                {f"{statement.module}.function"}
+                            ))
+                        continue
+                    scope.bind_name(alias.asname or alias.name, frozenset(
+                        {f"{statement.module}.{alias.name}"}
+                    ))
+                continue
+            if isinstance(statement, ast.Assign):
+                for target in statement.targets:
+                    bind_assignment(scope, target, statement.value)
+                continue
+            if isinstance(statement, ast.AnnAssign) and statement.value is not None:
+                bind_assignment(scope, statement.target, statement.value)
+                continue
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                for decorator in statement.decorator_list:
+                    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+                    if any(
+                        candidate.casefold() in gpu_decorators
+                        for candidate in scope.canonical(target)
+                    ):
+                        declarations.add(statement.name)
+                scan_body(statement.body, Scope(scope))
+                scope.bind_name(statement.name, frozenset({statement.name}))
+                continue
+            if isinstance(statement, ast.If):
+                condition = scope.clone()
+                scan_expression_aliases(statement.test, condition)
+                body = condition.clone()
+                otherwise = condition.clone()
+                scan_body(statement.body, body)
+                scan_body(statement.orelse, otherwise)
+                scope.merge([body, otherwise])
+                continue
+            if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+                entry = scope.clone()
+                if isinstance(statement, (ast.For, ast.AsyncFor)):
+                    scan_expression_aliases(statement.iter, entry)
+                else:
+                    scan_expression_aliases(statement.test, entry)
+                body = entry.clone()
+                scan_body(statement.body, body)
+                # A break/continue or exception caught by an enclosing block
+                # can expose any prefix of the loop body's assignments.
+                body.promote_observed()
+                without_iteration = entry.clone()
+                scan_body(statement.orelse, without_iteration)
+                after_iteration = body.clone()
+                scan_body(statement.orelse, after_iteration)
+                scope.merge([entry, body, without_iteration, after_iteration])
+                continue
+            if isinstance(statement, (ast.With, ast.AsyncWith)):
+                scan_body(statement.body, scope)
+                continue
+            if isinstance(statement, (ast.Try, ast.TryStar)):
+                successful = scope.clone()
+                scan_body(statement.body, successful)
+                scan_body(statement.orelse, successful)
+                branches = [successful]
+                for handler in statement.handlers:
+                    handled = scope.clone()
+                    # Exceptions may leave bindings made by any completed
+                    # prefix of the try body visible to the handler.
+                    for name, candidates in successful.observed.items():
+                        handled.aliases[name] = handled.lookup(name) | candidates
+                    scan_body(handler.body, handled)
+                    branches.append(handled)
+                scope.merge(branches)
+                scan_body(statement.finalbody, scope)
+                continue
+            if isinstance(statement, ast.Match):
+                branches = [scope.clone()]
+                for case in statement.cases:
+                    branch = scope.clone()
+                    if case.guard is not None:
+                        scan_expression_aliases(case.guard, branch)
+                    scan_body(case.body, branch)
+                    branches.append(branch)
+                scope.merge(branches)
+
+    scan_body(tree.body, Scope())
+    return declarations
 
 
 def _stage_web_branding(
@@ -610,24 +869,7 @@ def _stage_engine_python_package(
     shutil.copytree(
         source_package,
         destination,
-        ignore=shutil.ignore_patterns(
-            "__pycache__",
-            "*.pyc",
-            "*.pyi",
-            "*.pyd",
-            "*.dll",
-            "*.dylib",
-            "*.so",
-            "*.lib",
-            "*.exp",
-            "*.obj",
-            "_runtime_modules",
-            "_runtime_packs",
-            "official_packages",
-            "player_runtime",
-            "project_templates",
-            "test",
-        ),
+        ignore=_web_engine_python_ignore,
     )
     public_api = source_package.parent / "infernux.py"
     if not public_api.is_file():
@@ -644,7 +886,7 @@ def _stage_engine_python_package(
     shutil.copytree(
         packaging_source,
         site_packages / "packaging",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyi"),
+        ignore=_web_engine_python_ignore,
     )
     if sys.version_info[:2] != (3, 13):
         raise RuntimeError(
@@ -657,7 +899,66 @@ def _stage_engine_python_package(
         invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
     ):
         raise RuntimeError("Web Player engine Python bytecode compilation failed")
+    _validate_web_python_payload(site_packages)
     request.report("analyze", 2, 2, "Web Player Python modules staged")
+
+
+_WEB_ENGINE_EXCLUDED_NAMES = frozenset(
+    {
+        "__pycache__",
+        "_runtime_modules",
+        "_runtime_packs",
+        "infernux.mcp.inxpkg",
+        "official_packages",
+        "player_runtime",
+        "project_templates",
+        "test",
+        "tests",
+    }
+)
+_WEB_ENGINE_EXCLUDED_SUFFIXES = frozenset(
+    {".dll", ".dylib", ".exp", ".lib", ".pyd", ".pyc", ".pyi", ".so"}
+)
+_WEB_FORBIDDEN_MODEL_SOURCE_SUFFIXES = frozenset(
+    {".blend", ".fbx", ".glb", ".gltf", ".obj"}
+)
+
+
+def _web_engine_python_ignore(directory: str, names: list[str]) -> set[str]:
+    del directory
+    return {
+        name
+        for name in names
+        if name.casefold() in _WEB_ENGINE_EXCLUDED_NAMES
+        or Path(name).suffix.casefold() in _WEB_ENGINE_EXCLUDED_SUFFIXES
+    }
+
+
+def _validate_web_python_payload(site_packages: Path) -> None:
+    """Keep editor/test/native build inputs outside the browser preload tree."""
+
+    forbidden: list[str] = []
+    for path in site_packages.rglob("*"):
+        relative = path.relative_to(site_packages).as_posix()
+        folded_parts = {
+            part.casefold() for part in path.relative_to(site_packages).parts
+        }
+        suffix = path.suffix.casefold()
+        if folded_parts & {"test", "tests"}:
+            forbidden.append(relative)
+        elif path.name.casefold() == "infernux.mcp.inxpkg":
+            forbidden.append(relative)
+        elif path.is_file() and suffix in _WEB_FORBIDDEN_MODEL_SOURCE_SUFFIXES:
+            forbidden.append(relative)
+        elif path.is_file() and suffix in {
+            ".dll", ".dylib", ".exp", ".lib", ".obj", ".pyd", ".pyi", ".so"
+        }:
+            forbidden.append(relative)
+    if forbidden:
+        raise RuntimeError(
+            "Web Player Python payload contains non-runtime files: "
+            + ", ".join(sorted(forbidden)[:12])
+        )
 
 
 def _stage_web_shader_sources(
