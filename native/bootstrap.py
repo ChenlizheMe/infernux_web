@@ -308,6 +308,9 @@ def _install_platform_runtime_api(native_module: Any) -> None:
     decorators_module = importlib.import_module("Infernux.components.decorators")
     fields_module = importlib.import_module("Infernux.components.fields")
     ref_wrappers_module = importlib.import_module("Infernux.components.ref_wrappers")
+    transform_authoring_module = importlib.import_module(
+        "Infernux.components.transform_authoring"
+    )
     serializable_module = importlib.import_module(
         "Infernux.components.serializable_object"
     )
@@ -352,6 +355,9 @@ def _install_platform_runtime_api(native_module: Any) -> None:
         "GameObjectRef": ref_wrappers_module.GameObjectRef,
         "disallow_multiple": decorators_module.disallow_multiple,
         "add_component_menu": decorators_module.add_component_menu,
+        "DrivenTransformProperties": transform_authoring_module.DrivenTransformProperties,
+        "drives_transform": transform_authoring_module.drives_transform,
+        "DrivesTransform": transform_authoring_module.DrivesTransform,
         "RuntimeExecutionScheduler": lifecycle_module.RuntimeExecutionScheduler,
         "ParticleSystem": particle_module.ParticleSystem,
         "ParticleBoundsMode": particle_module.ParticleBoundsMode,
