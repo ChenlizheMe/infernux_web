@@ -1166,7 +1166,7 @@ int main()
                              message.data);
                 return;
             }
-            g_adapter = adapter;
+            g_adapter = std::move(adapter);
             wgpu::DeviceDescriptor descriptor;
             wgpu::Limits adapterLimits;
             wgpu::Limits requiredLimits;
@@ -1208,7 +1208,7 @@ int main()
                                      message.data);
                         return;
                     }
-                    g_device = device;
+                    g_device = std::move(device);
                     StartSurface();
                 });
         });

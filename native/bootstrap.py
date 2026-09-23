@@ -304,7 +304,6 @@ def _install_platform_runtime_api(native_module: Any) -> None:
     lib = importlib.import_module("Infernux.lib")
     math_module = importlib.import_module("Infernux.math")
     debug_module = importlib.import_module("Infernux.debug")
-    version_module = importlib.import_module("Infernux.version")
     component_module = importlib.import_module("Infernux.components.component")
     decorators_module = importlib.import_module("Infernux.components.decorators")
     fields_module = importlib.import_module("Infernux.components.fields")
@@ -424,12 +423,10 @@ def _install_platform_runtime_api(native_module: Any) -> None:
     for name, value in gameplay_exports.items():
         setattr(package, name, value)
     package.Debug = debug_module.Debug
-    package.__version__ = version_module.ENGINE_VERSION
     package.__all__ = tuple(
         sorted(
             {
                 "Debug",
-                "__version__",
                 *screen_module.__all__,
                 *getattr(math_module, "__all__", ()),
                 *components.__all__,

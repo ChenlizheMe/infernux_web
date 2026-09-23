@@ -86,9 +86,9 @@ def test_web_bootstrap_binds_guid_asset_api_to_player_memfs() -> None:
     assert '"AssetFile": assets_module.AssetFile' in public_api
     assert '"AssetManager": assets_module.AssetManager' in public_api
     assert '"SandboxPath": sandbox_files_module.SandboxPath' in public_api
-    assert 'version_module = importlib.import_module("Infernux.version")' in public_api
-    assert "package.__version__ = version_module.ENGINE_VERSION" in public_api
-    assert '"__version__"' in public_api
+    assert 'import_module("Infernux.version")' not in public_api
+    assert "package.__version__" not in public_api
+    assert '"__version__"' not in public_api
     assert '_loose_root = os.path.join(_persistent_root, "loose")' in asset_contract
     assert 'os.environ["_INFERNUX_PLAYER_INSTALL_ROOT"] = _loose_root' in asset_contract
     assert 'os.environ["_INFERNUX_PLAYER_INSTALL_ROOT"] = _player_root' not in asset_contract
