@@ -1309,7 +1309,7 @@ def _submit_screen_ui() -> None:
 
 
 def _process_screen_ui_events(delta_time: float) -> None:
-    """Dispatch browser mouse input through the same Screen UI event system as Players."""
+    """Dispatch browser mouse and touch input through the Player UI event system."""
 
     if _player_scene_manager is None or _screen_ui_event_processor is None:
         return
@@ -1318,7 +1318,9 @@ def _process_screen_ui_events(delta_time: float) -> None:
         collect_sorted_runtime_canvas_snapshot,
     )
     from Infernux.engine.runtime_screen_ui import _canvas_metrics
-    from Infernux.input import Input
+    from Infernux.input import Input, TouchPhase
+    from Infernux.ui.ui_event_data import PointerType
+    from Infernux.ui.ui_event_system import UIPointerFrame
 
     scene = _player_scene_manager.get_active_scene()
     persistent_scene = _player_scene_manager.get_runtime_persistent_scene()
@@ -1334,12 +1336,12 @@ def _process_screen_ui_events(delta_time: float) -> None:
     mouse_x, mouse_y, scroll_x, scroll_y, held, down, up = (
         Input.get_game_mouse_frame_state(0)
     )
-    canvas_positions: list[tuple[float, float]] = []
+    canvas_scales: list[tuple[float, float]] = []
     for canvas in canvases:
         reference_width = float(getattr(canvas, "reference_width", 1920))
         reference_height = float(getattr(canvas, "reference_height", 1080))
         if reference_width < 1.0 or reference_height < 1.0:
-            canvas_positions.append((0.0, 0.0))
+            canvas_scales.append((float("inf"), float("inf")))
             continue
         scale_x, scale_y, _, logical_width, logical_height = _canvas_metrics(
             canvas, _screen_width, _screen_height
@@ -1347,21 +1349,60 @@ def _process_screen_ui_events(delta_time: float) -> None:
         set_input_logical_size = getattr(canvas, "set_input_logical_size", None)
         if callable(set_input_logical_size):
             set_input_logical_size(logical_width, logical_height)
-        canvas_positions.append(
-            (
-                float(mouse_x) / max(float(scale_x), 1.0e-6),
-                float(mouse_y) / max(float(scale_y), 1.0e-6),
+        canvas_scales.append(
+            (max(float(scale_x), 1.0e-6), max(float(scale_y), 1.0e-6))
+        )
+
+    def canvas_positions(screen_x: float, screen_y: float):
+        return tuple(
+            (screen_x / scale_x, screen_y / scale_y)
+            for scale_x, scale_y in canvas_scales
+        )
+
+    pointers = [
+        UIPointerFrame(
+            pointer_id=-1,
+            pointer_type=PointerType.Mouse,
+            canvas_positions=canvas_positions(float(mouse_x), float(mouse_y)),
+            down=bool(down),
+            up=bool(up),
+            held=bool(held),
+            scroll_delta=(float(scroll_x), float(scroll_y)),
+        )
+    ]
+    for touch in Input.touches:
+        normalized_x, normalized_y = touch.normalized_position
+        release_positions = canvas_positions(
+            float(normalized_x) * _screen_width,
+            (1.0 - float(normalized_y)) * _screen_height,
+        )
+        same_frame_terminal = touch.began_this_frame and touch.phase in (
+            TouchPhase.ENDED, TouchPhase.CANCELED
+        )
+        press_positions = ()
+        if same_frame_terminal:
+            begin_x, begin_y = touch.begin_normalized_position
+            press_positions = canvas_positions(
+                float(begin_x) * _screen_width,
+                (1.0 - float(begin_y)) * _screen_height,
+            )
+        pointers.append(
+            UIPointerFrame(
+                pointer_id=int(touch.finger_id),
+                pointer_type=PointerType.Touch,
+                canvas_positions=release_positions,
+                down=touch.phase is TouchPhase.BEGAN or same_frame_terminal,
+                up=touch.phase in (TouchPhase.ENDED, TouchPhase.CANCELED),
+                held=touch.phase in (
+                    TouchPhase.BEGAN, TouchPhase.MOVED, TouchPhase.STATIONARY
+                ),
+                canceled=touch.phase is TouchPhase.CANCELED,
+                press_canvas_positions=press_positions,
             )
         )
 
-    _screen_ui_event_processor.process(
-        list(canvases),
-        canvas_positions,
-        bool(down),
-        bool(up),
-        bool(held),
-        (float(scroll_x), float(scroll_y)),
-        max(0.0, min(float(delta_time), 0.25)),
+    _screen_ui_event_processor.process_pointers(
+        list(canvases), pointers, max(0.0, min(float(delta_time), 0.25))
     )
 
 
