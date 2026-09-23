@@ -1,9 +1,12 @@
 """Web exporter policy tests."""
 
+import sys
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from Infernux.engine.game_builder import GameBuilder
 from infernux_web.exporter import (
     _reject_unshipped_web_dependencies,
     _validate_web_python_payload,
@@ -181,6 +184,38 @@ def test_web_dependency_scan_keeps_cpu_jit_decorators_for_plain_runtime(
     _reject_unshipped_web_dependencies(
         _python_sources(tmp_path), _player_manifest_with_numpy()
     )
+
+
+def test_web_cook_executes_public_cpu_jit_source_without_a_jit_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = (
+        "import infernux as inx\n"
+        "@inx.jit.compile(parallel_policy='required')\n"
+        "def advance(value):\n"
+        "    return value + 3\n\n"
+        "def run():\n"
+        "    inx.jit.warmup(advance, 4)\n"
+        "    return advance(4)\n"
+    )
+    cooked = GameBuilder._cook_compute_source(
+        SimpleNamespace(include_jit_runtime=False), source
+    )
+    script = tmp_path / "Assets" / "Scripts" / "Compute.py"
+    script.parent.mkdir(parents=True)
+    script.write_text(cooked, encoding="utf-8")
+    _reject_unshipped_web_dependencies((script,))
+
+    # An uncooked decorator or warmup call would fail in this no-JIT namespace.
+    no_jit = ModuleType("infernux")
+    no_jit.jit = SimpleNamespace(compile=None, warmup=None)
+    monkeypatch.setitem(sys.modules, "infernux", no_jit)
+    namespace: dict[str, object] = {}
+    exec(compile(cooked, str(script), "exec"), namespace)
+    assert namespace["run"]() == 7
+    assert "@inx.jit.compile" not in cooked
+    assert "inx.jit.warmup(" not in cooked
 
 
 @pytest.mark.parametrize(
