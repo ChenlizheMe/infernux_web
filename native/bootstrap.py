@@ -1176,6 +1176,7 @@ def infernux_web_drain_input() -> tuple[tuple[str, dict[str, Any]], ...]:
 class _WebScreenUIList:
     Camera = 0
     Overlay = 1
+    World = 2
 
 
 class _WebScreenUIRenderer:
@@ -1200,6 +1201,30 @@ class _WebScreenUIRenderer:
 
     def add_filled_rect(self, *arguments: Any) -> None:
         self._host.screen_ui_add_filled_rect(*arguments)
+
+    def set_material_binding(
+        self, ui_list: int, guid: str, generation: int, pipeline_key: str,
+        color: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0),
+        alpha_clip_enabled: bool = False, alpha_clip_threshold: float = 0.0,
+    ) -> None:
+        self._host.screen_ui_set_material_binding(
+            ui_list, guid, generation, pipeline_key, color,
+            alpha_clip_enabled, alpha_clip_threshold,
+        )
+
+    def begin_world_object(
+        self, game_object: Any, pivot_x: float, pivot_y: float,
+        always_on_top: bool, billboard: bool, constant_screen_size: bool,
+        ignored_occluder_id: int = 0,
+    ) -> None:
+        self._host.screen_ui_begin_world_element(
+            tuple(game_object.transform.local_to_world_matrix()),
+            pivot_x, pivot_y, int(game_object.layer), always_on_top,
+            billboard, constant_screen_size, ignored_occluder_id,
+        )
+
+    def end_world_element(self) -> None:
+        self._host.screen_ui_end_world_element()
 
     def push_clip_rect(self, *arguments: Any) -> None:
         self._host.screen_ui_push_clip_rect(*arguments)
@@ -1267,7 +1292,9 @@ def _submit_screen_ui() -> None:
     ):
         return
 
-    from Infernux.engine.runtime_screen_ui import RuntimeScreenUISubmission, _canvas_metrics
+    from Infernux.engine.runtime_screen_ui import (
+        RuntimeScreenUISubmission, _collect_world_ui_elements,
+    )
     from Infernux.engine.ui.runtime_canvas_snapshot import (
         collect_sorted_runtime_canvas_snapshot,
     )
@@ -1282,6 +1309,7 @@ def _submit_screen_ui() -> None:
         canvases = tuple(
             collect_sorted_runtime_canvas_snapshot(scene, persistent_scene)
         )
+    world_elements = _collect_world_ui_elements(scene, persistent_scene)
     _screen_ui_texture_cache.poll()
     revision = runtime_ui_revision(
         scene,
@@ -1289,6 +1317,8 @@ def _submit_screen_ui() -> None:
         _screen_width,
         _screen_height,
         _screen_ui_texture_cache.generation,
+        world_elements,
+        persistent_scene,
     )
     if not _screen_ui_texture_cache.has_pending and _screen_ui_renderer.begin_frame_cached(
         _screen_width, _screen_height, revision
@@ -1296,6 +1326,11 @@ def _submit_screen_ui() -> None:
         return
     if _screen_ui_texture_cache.has_pending:
         _screen_ui_renderer.begin_frame(_screen_width, _screen_height)
+    for element in world_elements:
+        RuntimeScreenUISubmission._submit_world_element(
+            element, _screen_ui_renderer, _screen_ui_texture_cache.get,
+            _WebScreenUIList,
+        )
     for canvas in canvases:
         RuntimeScreenUISubmission._submit_canvas(
             canvas,
@@ -1314,56 +1349,33 @@ def _process_screen_ui_events(delta_time: float) -> None:
     if _player_scene_manager is None or _screen_ui_event_processor is None:
         return
 
-    from Infernux.engine.ui.runtime_canvas_snapshot import (
-        collect_sorted_runtime_canvas_snapshot,
+    from Infernux.engine.runtime_screen_ui import (
+        collect_runtime_ui_input_surfaces, map_runtime_ui_pointer,
     )
-    from Infernux.engine.runtime_screen_ui import _canvas_metrics
     from Infernux.input import Input, TouchPhase
     from Infernux.ui.ui_event_data import PointerType
     from Infernux.ui.ui_event_system import UIPointerFrame
 
     scene = _player_scene_manager.get_active_scene()
     persistent_scene = _player_scene_manager.get_runtime_persistent_scene()
-    canvases = (
-        tuple(collect_sorted_runtime_canvas_snapshot(scene, persistent_scene))
-        if scene is not None
-        else ()
-    )
-    if not canvases:
+    surfaces = collect_runtime_ui_input_surfaces(scene, persistent_scene)
+    if not surfaces:
         _screen_ui_event_processor.reset()
         return
-
+    camera = scene.effective_game_camera if scene is not None else None
     mouse_x, mouse_y, scroll_x, scroll_y, held, down, up = (
         Input.get_game_mouse_frame_state(0)
     )
-    canvas_scales: list[tuple[float, float]] = []
-    for canvas in canvases:
-        reference_width = float(getattr(canvas, "reference_width", 1920))
-        reference_height = float(getattr(canvas, "reference_height", 1080))
-        if reference_width < 1.0 or reference_height < 1.0:
-            canvas_scales.append((float("inf"), float("inf")))
-            continue
-        scale_x, scale_y, _, logical_width, logical_height = _canvas_metrics(
-            canvas, _screen_width, _screen_height
-        )
-        set_input_logical_size = getattr(canvas, "set_input_logical_size", None)
-        if callable(set_input_logical_size):
-            set_input_logical_size(logical_width, logical_height)
-        canvas_scales.append(
-            (max(float(scale_x), 1.0e-6), max(float(scale_y), 1.0e-6))
-        )
-
-    def canvas_positions(screen_x: float, screen_y: float):
-        return tuple(
-            (screen_x / scale_x, screen_y / scale_y)
-            for scale_x, scale_y in canvas_scales
+    def positions(screen_x: float, screen_y: float):
+        return map_runtime_ui_pointer(
+            surfaces, camera, screen_x, screen_y, _screen_width, _screen_height
         )
 
     pointers = [
         UIPointerFrame(
             pointer_id=-1,
             pointer_type=PointerType.Mouse,
-            canvas_positions=canvas_positions(float(mouse_x), float(mouse_y)),
+            canvas_positions=positions(float(mouse_x), float(mouse_y)),
             down=bool(down),
             up=bool(up),
             held=bool(held),
@@ -1372,7 +1384,7 @@ def _process_screen_ui_events(delta_time: float) -> None:
     ]
     for touch in Input.touches:
         normalized_x, normalized_y = touch.normalized_position
-        release_positions = canvas_positions(
+        release_positions = positions(
             float(normalized_x) * _screen_width,
             (1.0 - float(normalized_y)) * _screen_height,
         )
@@ -1382,7 +1394,7 @@ def _process_screen_ui_events(delta_time: float) -> None:
         press_positions = ()
         if same_frame_terminal:
             begin_x, begin_y = touch.begin_normalized_position
-            press_positions = canvas_positions(
+            press_positions = positions(
                 float(begin_x) * _screen_width,
                 (1.0 - float(begin_y)) * _screen_height,
             )
@@ -1402,7 +1414,7 @@ def _process_screen_ui_events(delta_time: float) -> None:
         )
 
     _screen_ui_event_processor.process_pointers(
-        list(canvases), pointers, max(0.0, min(float(delta_time), 0.25))
+        surfaces, pointers, max(0.0, min(float(delta_time), 0.25))
     )
 
 

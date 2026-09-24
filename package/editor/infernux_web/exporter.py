@@ -1015,6 +1015,7 @@ void main() {
             "source": "web_host.frag",
         },
     ]
+    _stage_web_ui_shader_sources(request, shader_root, shader_entries, native)
     particle_kernels: dict[str, dict[str, object]] = {}
     data_roots = sorted(player_assets.glob("*_Data"))
     if len(data_roots) != 1:
@@ -1162,6 +1163,84 @@ void main() {
         newline="\n",
     )
     request.report("shaders", 1, 2, "Shared fullscreen GLSL prepared")
+
+
+def _stage_web_ui_shader_sources(
+    request: BuildRequest,
+    shader_root: Path,
+    shader_entries: list[dict[str, str]],
+    native: object,
+) -> None:
+    """Cook authored UI stages by asset GUID into the browser shader catalog.
+
+    Meta file paths are deliberately ignored: the companion source file is
+    located inside this project's Assets tree, while the material's GUID is
+    the only identity used to select it.
+    """
+
+    assets_root = Path(request.project_root).resolve() / "Assets"
+    shader_assets: dict[str, tuple[Path, str, str, bool]] = {}
+    for meta_path in sorted(assets_root.rglob("*.meta")):
+        source_path = meta_path.with_suffix("")
+        if source_path.suffix not in {".vert", ".frag"}:
+            continue
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))["metadata"]
+        guid = str(metadata["guid"]["value"])
+        capabilities = json.loads(metadata["shader_capabilities"]["value"])
+        domains = set(capabilities) & {"ScreenUI", "WorldUI"}
+        if domains:
+            if len(domains) != 1:
+                raise ValueError(f"UI shader has ambiguous domains: {guid}")
+            has_properties = bool(json.loads(metadata["properties"]["value"]))
+            shader_assets[guid] = (
+                source_path, str(metadata["shader_id"]["value"]), domains.pop(),
+                has_properties,
+            )
+
+    staged: dict[tuple[str, str], str] = {}
+    for material_path in sorted(assets_root.rglob("*.mat")):
+        material = json.loads(material_path.read_text(encoding="utf-8"))
+        stages = material.get("shaders", {})
+        if not isinstance(stages, dict):
+            continue
+        stage_refs = (stages.get("vertex"), stages.get("fragment"))
+        if not all(isinstance(reference, dict) for reference in stage_refs):
+            continue
+        shader_guids = [str(reference.get("guid", "")) for reference in stage_refs]
+        if not any(guid in shader_assets for guid in shader_guids):
+            continue
+        if not all(guid in shader_assets for guid in shader_guids):
+            raise ValueError(f"UI material has an incomplete shader GUID pair: {material_path.name}")
+        if shader_assets[shader_guids[0]][2] != shader_assets[shader_guids[1]][2]:
+            raise ValueError(f"UI material shader domains disagree: {material_path.name}")
+        if any(shader_assets[guid][3] for guid in shader_guids):
+            raise ValueError(
+                "Web UI material shader properties require the material descriptor ABI: "
+                f"{material_path.name}"
+            )
+        for stage, reference, guid in zip(("vertex", "fragment"), stage_refs, shader_guids):
+            source_path, shader_id, _domain, _has_properties = shader_assets[guid]
+            if source_path.suffix != (".vert" if stage == "vertex" else ".frag"):
+                raise ValueError(f"UI shader GUID has the wrong stage: {guid}")
+            if shader_id != str(reference.get("shader_id", "")):
+                raise ValueError(f"UI material shader identity changed: {guid}")
+            identity = (shader_id, stage)
+            previous = staged.get(identity)
+            if previous is not None:
+                if previous != guid:
+                    raise ValueError(f"Duplicate UI shader identity: {shader_id} ({stage})")
+                continue
+            source_name = f"ui-{guid}{source_path.suffix}"
+            prepared = native._prepare_authored_shader_glsl(
+                source_path.read_text(encoding="utf-8"), str(source_path)
+            )
+            (shader_root / source_name).write_text(
+                prepared, encoding="utf-8", newline="\n"
+            )
+            shader_entries.append(
+                {"name": shader_id, "stage": stage, "source": source_name}
+            )
+            staged[identity] = guid
 
 
 def _assemble_web_host(

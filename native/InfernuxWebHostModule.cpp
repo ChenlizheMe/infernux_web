@@ -28,6 +28,8 @@
 #endif
 
 #include <exception>
+#include <array>
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -395,6 +397,109 @@ PyObject *ScreenUIBeginFrameCached(PyObject *, PyObject *arguments)
     return PyBool_FromLong(g_screenUIRenderer && g_screenUIRenderer->BeginFrameCached(width, height, revision));
 }
 
+PyObject *ScreenUISetMaterialBinding(PyObject *, PyObject *arguments)
+{
+    int list = 0;
+    const char *guid = nullptr;
+    unsigned long long generation = 0;
+    const char *pipelineKey = nullptr;
+    PyObject *colorObject = nullptr;
+    int alphaClipEnabled = 0;
+    double alphaClipThreshold = 0.0;
+    if (!PyArg_ParseTuple(arguments, "isKsOpd:screen_ui_set_material_binding", &list, &guid,
+                          &generation, &pipelineKey, &colorObject, &alphaClipEnabled,
+                          &alphaClipThreshold))
+        return nullptr;
+    PyObject *colors = PySequence_Fast(colorObject, "UI material color must have four components");
+    if (!colors)
+        return nullptr;
+    if (PySequence_Fast_GET_SIZE(colors) != 4) {
+        Py_DECREF(colors);
+        PyErr_SetString(PyExc_ValueError, "UI material color must have four components");
+        return nullptr;
+    }
+    std::array<float, 4> color{};
+    for (int index = 0; index < 4; ++index) {
+        color[static_cast<size_t>(index)] =
+            static_cast<float>(PyFloat_AsDouble(PySequence_Fast_GET_ITEM(colors, index)));
+    }
+    Py_DECREF(colors);
+    if (PyErr_Occurred())
+        return nullptr;
+    try {
+        if (!g_screenUIRenderer)
+            throw std::logic_error("Web UI material renderer is unavailable");
+        g_screenUIRenderer->SetMaterialBinding(list, guid, generation, pipelineKey, color,
+                                               alphaClipEnabled != 0, static_cast<float>(alphaClipThreshold));
+        Py_RETURN_NONE;
+    } catch (const std::exception &error) {
+        PyErr_SetString(PyExc_RuntimeError, error.what());
+        return nullptr;
+    }
+}
+
+PyObject *ScreenUIBeginWorldElement(PyObject *, PyObject *arguments)
+{
+    PyObject *matrixObject = nullptr;
+    double pivotX = 0.0;
+    double pivotY = 0.0;
+    unsigned int layer = 0;
+    int alwaysOnTop = 0;
+    int billboard = 0;
+    int constantScreenSize = 0;
+    unsigned long long ignoredOccluderId = 0;
+    if (!PyArg_ParseTuple(arguments, "OddIpppK:screen_ui_begin_world_element", &matrixObject,
+                          &pivotX, &pivotY, &layer, &alwaysOnTop, &billboard,
+                          &constantScreenSize, &ignoredOccluderId))
+        return nullptr;
+    PyObject *values = PySequence_Fast(matrixObject, "World UI transform must have 16 floats");
+    if (!values)
+        return nullptr;
+    if (PySequence_Fast_GET_SIZE(values) != 16) {
+        Py_DECREF(values);
+        PyErr_SetString(PyExc_ValueError, "World UI transform must have 16 floats");
+        return nullptr;
+    }
+    std::array<float, 16> matrix{};
+    for (int index = 0; index < 16; ++index)
+        matrix[static_cast<size_t>(index)] =
+            static_cast<float>(PyFloat_AsDouble(PySequence_Fast_GET_ITEM(values, index)));
+    Py_DECREF(values);
+    if (PyErr_Occurred())
+        return nullptr;
+    for (float value : matrix) {
+        if (!std::isfinite(value)) {
+            PyErr_SetString(PyExc_ValueError, "World UI transform must be finite");
+            return nullptr;
+        }
+    }
+    try {
+        if (!g_screenUIRenderer)
+            throw std::logic_error("Web world UI renderer is unavailable");
+        g_screenUIRenderer->BeginWorldElement(matrix, static_cast<float>(pivotX),
+                                               static_cast<float>(pivotY), layer, alwaysOnTop != 0,
+                                               billboard != 0, constantScreenSize != 0,
+                                               ignoredOccluderId);
+        Py_RETURN_NONE;
+    } catch (const std::exception &error) {
+        PyErr_SetString(PyExc_RuntimeError, error.what());
+        return nullptr;
+    }
+}
+
+PyObject *ScreenUIEndWorldElement(PyObject *, PyObject *)
+{
+    try {
+        if (!g_screenUIRenderer)
+            throw std::logic_error("Web world UI renderer is unavailable");
+        g_screenUIRenderer->EndWorldElement();
+        Py_RETURN_NONE;
+    } catch (const std::exception &error) {
+        PyErr_SetString(PyExc_RuntimeError, error.what());
+        return nullptr;
+    }
+}
+
 PyObject *ScreenUIPushClipRect(PyObject *, PyObject *arguments)
 {
     int list = 0;
@@ -693,6 +798,9 @@ PyMethodDef kMethods[] = {
     {"is_text_input_active", IsTextInputActive, METH_NOARGS, "Return whether browser text input is active."},
     {"screen_ui_begin_frame", ScreenUIBeginFrame, METH_VARARGS, nullptr},
     {"screen_ui_begin_frame_cached", ScreenUIBeginFrameCached, METH_VARARGS, nullptr},
+    {"screen_ui_set_material_binding", ScreenUISetMaterialBinding, METH_VARARGS, nullptr},
+    {"screen_ui_begin_world_element", ScreenUIBeginWorldElement, METH_VARARGS, nullptr},
+    {"screen_ui_end_world_element", ScreenUIEndWorldElement, METH_NOARGS, nullptr},
     {"screen_ui_push_clip_rect", ScreenUIPushClipRect, METH_VARARGS, nullptr},
     {"screen_ui_pop_clip_rect", ScreenUIPopClipRect, METH_VARARGS, nullptr},
     {"screen_ui_add_filled_rect", ScreenUIAddFilledRect, METH_VARARGS, nullptr},

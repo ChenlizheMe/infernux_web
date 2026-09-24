@@ -11,6 +11,8 @@
 #include <platform/filesystem/InxPack.h>
 #include <platform/input/InputManager.h>
 #if defined(INFERNUX_WEB_ENGINE_RUNTIME)
+#include <function/scene/Camera.h>
+#include <function/scene/Scene.h>
 #include <function/scene/SceneManager.h>
 #include <function/scene/physics/PhysicsWorld.h>
 #endif
@@ -977,6 +979,7 @@ void Frame()
         passDescriptor.colorAttachmentCount = 1;
         passDescriptor.colorAttachments = &colorAttachment;
         wgpu::RenderPassDepthStencilAttachment depthAttachment;
+        g_sceneRenderer.Resize(g_width, g_height);
         if (g_sceneRenderer.HasDepthTarget()) {
             depthAttachment.view = g_sceneRenderer.GetDepthView();
             depthAttachment.depthLoadOp = wgpu::LoadOp::Clear;
@@ -988,7 +991,7 @@ void Frame()
             g_particleRuntime.RecordCompute(encoder);
         const bool scenePrepared =
             !g_splashActive && !g_webGpuValidationFailed && g_sceneRenderer.Prepare(encoder, g_width, g_height);
-        if (scenePrepared && g_sceneRenderer.HasDepthTarget())
+        if (g_sceneRenderer.HasDepthTarget())
             passDescriptor.depthStencilAttachment = &depthAttachment;
         wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&passDescriptor);
         const bool renderedScene = scenePrepared && g_sceneRenderer.RenderPrepared(pass);
@@ -1002,6 +1005,25 @@ void Frame()
         if (scenePrepared && g_particleRuntimeReady && g_particleRenderingEnabledForDiagnostics &&
             !g_webGpuValidationFailed)
             (void)g_particleRuntime.Render(pass, g_width, g_height);
+#if defined(INFERNUX_WEB_ENGINE_RUNTIME)
+        if (!g_splashActive && !g_webGpuValidationFailed && g_sceneRenderer.HasDepthTarget()) {
+            auto *scene = infernux::SceneManager::Instance().GetActiveScene();
+            auto *camera = scene ? scene->FindGameCamera(nullptr) : nullptr;
+            if (camera) {
+                camera->SetAspectRatio(static_cast<float>(g_width) / static_cast<float>(std::max(1u, g_height)));
+                glm::mat4 webClip(1.0f);
+                webClip[1][1] = -1.0f;
+                try {
+                    (void)g_screenUIRenderer.RenderWorld(pass, webClip * camera->GetViewProjectionMatrix(),
+                                                         camera->GetViewMatrix(), camera->GetProjectionMatrix(),
+                                                         camera->GetCullingMask(), g_width, g_height);
+                } catch (const std::exception &error) {
+                    std::fprintf(stderr, "INFERNUX_WEB_WORLD_UI_RENDER_FAILED %s\n", error.what());
+                    g_webGpuValidationFailed = true;
+                }
+            }
+        }
+#endif
         pass.End();
         if (!g_splashActive && !g_webGpuValidationFailed && !g_postProcessRenderer.PrepareBloom(encoder)) {
             std::fprintf(stderr, "INFERNUX_WEB_BLOOM_RECORDING_FAILED\n");
@@ -1020,8 +1042,13 @@ void Frame()
         if (!g_splashActive && !g_webGpuValidationFailed)
             (void)g_postProcessRenderer.Render(presentPass);
         if (!g_webGpuValidationFailed) {
-            (void)g_screenUIRenderer.Render(presentPass, 0, g_width, g_height);
-            (void)g_screenUIRenderer.Render(presentPass, 1, g_width, g_height);
+            try {
+                (void)g_screenUIRenderer.Render(presentPass, 0, g_width, g_height);
+                (void)g_screenUIRenderer.Render(presentPass, 1, g_width, g_height);
+            } catch (const std::exception &error) {
+                std::fprintf(stderr, "INFERNUX_WEB_SCREEN_UI_RENDER_FAILED %s\n", error.what());
+                g_webGpuValidationFailed = true;
+            }
         }
         presentPass.End();
         wgpu::CommandBuffer commands = encoder.Finish();
@@ -1090,7 +1117,8 @@ void StartSurface()
         std::fprintf(stderr, "INFERNUX_WEBGPU_SCENE_PIPELINE_FAILED\n");
         return;
     }
-    if (!g_screenUIRenderer.Initialize(g_device, g_queue, g_surfaceFormat)) {
+    if (!g_screenUIRenderer.Initialize(g_device, g_queue, g_surfaceFormat, sceneColorFormat,
+                                       sceneSampleCount)) {
         std::fprintf(stderr, "INFERNUX_WEB_SCREEN_UI_INITIALIZATION_FAILED\n");
         return;
     }
