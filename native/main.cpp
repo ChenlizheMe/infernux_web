@@ -18,6 +18,7 @@
 #endif
 
 #include "InfernuxWebHostModule.h"
+#include "WebFullscreenShaderContract.h"
 #include "WebGpuRhiDevice.h"
 #include "WebParticleRuntime.h"
 #include "WebPostProcessRenderer.h"
@@ -202,7 +203,7 @@ class WebFullscreenRendererHost final : public infernux::FullscreenRendererHost
 
     [[nodiscard]] infernux::rhi::ShaderModuleHandle AcquireShaderModule(
         const std::string &name, infernux::rhi::ShaderStage stage,
-        uint32_t /*inputTextureCount*/) override
+        uint32_t inputCount, uint32_t inputBufferMask) override
     {
         const char *stageName = nullptr;
         if (stage == infernux::rhi::ShaderStage::Vertex)
@@ -216,6 +217,13 @@ class WebFullscreenRendererHost final : public infernux::FullscreenRendererHost
         std::string source;
         if (!InfernuxWebFindShaderSource(name, stageName, source))
             return {};
+        if (stage == infernux::rhi::ShaderStage::Fragment) {
+            std::string contractError;
+            if (!infernux::web::ValidateFullscreenShaderInputs(source, inputCount, inputBufferMask, contractError)) {
+                ReportError("Fullscreen shader '" + name + "': " + contractError);
+                return {};
+            }
+        }
         return m_device.CreateShaderModule(infernux::rhi::ShaderModuleDesc::FromWgsl(source.data(), source.size()));
     }
 

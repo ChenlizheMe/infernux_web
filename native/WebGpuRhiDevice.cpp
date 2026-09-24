@@ -578,16 +578,17 @@ rhi::ShaderModuleHandle WebGpuRhiDevice::CreateShaderModule(const rhi::ShaderMod
         return {};
     }
     std::string normalizedSource(static_cast<const char *>(desc.code), desc.byteSize);
-    // The RHI StorageBuffer contract permits read and write access. Vulkan can
-    // bind that wider contract to a shader that only reads, while WebGPU
-    // requires the shader access mode and BindGroupLayout type to match
-    // exactly. Widen read-only WGSL declarations without changing their use.
-    constexpr std::string_view readOnlyStorage = "var<storage, read>";
-    constexpr std::string_view readWriteStorage = "var<storage, read_write>";
-    size_t storageCursor = 0;
-    while ((storageCursor = normalizedSource.find(readOnlyStorage, storageCursor)) != std::string::npos) {
-        normalizedSource.replace(storageCursor, readOnlyStorage.size(), readWriteStorage);
-        storageCursor += readWriteStorage.size();
+    if (desc.widenReadOnlyStorage) {
+        // Particle compute layouts intentionally grant write access even for
+        // read-only inputs. Fullscreen graphics inputs leave this disabled so
+        // their WGSL and read-only WebGPU layout describe the same access.
+        constexpr std::string_view readOnlyStorage = "var<storage, read>";
+        constexpr std::string_view readWriteStorage = "var<storage, read_write>";
+        size_t storageCursor = 0;
+        while ((storageCursor = normalizedSource.find(readOnlyStorage, storageCursor)) != std::string::npos) {
+            normalizedSource.replace(storageCursor, readOnlyStorage.size(), readWriteStorage);
+            storageCursor += readWriteStorage.size();
+        }
     }
     wgpu::ShaderSourceWGSL source;
     source.code = wgpu::StringView(normalizedSource.data(), normalizedSource.size());
@@ -626,7 +627,8 @@ wgpu::BindGroupLayout WebGpuRhiDevice::CreateNativeBindingLayout(const rhi::Bind
             entry.buffer.type = wgpu::BufferBindingType::Uniform;
             break;
         case rhi::BindingType::StorageBuffer:
-            entry.buffer.type = wgpu::BufferBindingType::Storage;
+            entry.buffer.type = source.readOnlyStorage ? wgpu::BufferBindingType::ReadOnlyStorage
+                                                       : wgpu::BufferBindingType::Storage;
             break;
         case rhi::BindingType::SampledTexture:
             entry.texture.sampleType =
