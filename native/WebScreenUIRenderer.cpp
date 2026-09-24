@@ -1,13 +1,13 @@
 #include "WebScreenUIRenderer.h"
 
+#include "InfernuxWebHostModule.h"
 #include <function/renderer/gui/InxTextLayout.h>
 #include <function/resources/AssetRegistry/AssetRegistry.h>
 #include <function/resources/InxMaterial/InxMaterial.h>
 #include <function/resources/InxTexture/InxTexture.h>
-#include "InfernuxWebHostModule.h"
-#include <imgui_internal.h>
-#include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <array>
@@ -24,7 +24,67 @@ namespace
 constexpr uint64_t kFontTextureId = 1;
 constexpr float kPi = 3.14159265358979323846f;
 
-void CommandBoundary(const ImDrawList *, const ImDrawCmd *) {}
+void CommandBoundary(const ImDrawList *, const ImDrawCmd *)
+{
+}
+
+wgpu::SamplerDescriptor UISamplerDescriptor(const std::string &filterMode, const std::string &wrapMode, int anisoLevel,
+                                            const MaterialTextureSampler &override)
+{
+    wgpu::SamplerDescriptor descriptor;
+    const wgpu::AddressMode inheritedAddress = wrapMode == "repeat"   ? wgpu::AddressMode::Repeat
+                                               : wrapMode == "mirror" ? wgpu::AddressMode::MirrorRepeat
+                                                                      : wgpu::AddressMode::ClampToEdge;
+    const auto address = [inheritedAddress](MaterialSamplerAddress value) {
+        switch (value) {
+        case MaterialSamplerAddress::Repeat:
+            return wgpu::AddressMode::Repeat;
+        case MaterialSamplerAddress::Clamp:
+            return wgpu::AddressMode::ClampToEdge;
+        case MaterialSamplerAddress::Mirror:
+            return wgpu::AddressMode::MirrorRepeat;
+        case MaterialSamplerAddress::Inherit:
+            return inheritedAddress;
+        }
+        return inheritedAddress;
+    };
+    descriptor.addressModeU = address(override.addressU);
+    descriptor.addressModeV = address(override.addressV);
+    descriptor.addressModeW = address(override.addressW);
+    const bool point = filterMode == "point";
+    const auto filter = [point](MaterialSamplerFilter value) {
+        switch (value) {
+        case MaterialSamplerFilter::Nearest:
+            return wgpu::FilterMode::Nearest;
+        case MaterialSamplerFilter::Linear:
+            return wgpu::FilterMode::Linear;
+        case MaterialSamplerFilter::Inherit:
+            return point ? wgpu::FilterMode::Nearest : wgpu::FilterMode::Linear;
+        }
+        return wgpu::FilterMode::Linear;
+    };
+    descriptor.minFilter = filter(override.minFilter);
+    descriptor.magFilter = filter(override.magFilter);
+    const uint16_t assetAnisotropy =
+        point ? 1u : static_cast<uint16_t>(std::clamp(anisoLevel < 0 ? 16 : anisoLevel, 1, 16));
+    const bool assetMipLinear = filterMode == "trilinear" || assetAnisotropy > 1u;
+    switch (override.mipFilter) {
+    case MaterialSamplerFilter::Nearest:
+        descriptor.mipmapFilter = wgpu::MipmapFilterMode::Nearest;
+        break;
+    case MaterialSamplerFilter::Linear:
+        descriptor.mipmapFilter = wgpu::MipmapFilterMode::Linear;
+        break;
+    case MaterialSamplerFilter::Inherit:
+        descriptor.mipmapFilter = assetMipLinear ? wgpu::MipmapFilterMode::Linear : wgpu::MipmapFilterMode::Nearest;
+        break;
+    }
+    const bool fullyLinear = descriptor.minFilter == wgpu::FilterMode::Linear &&
+                             descriptor.magFilter == wgpu::FilterMode::Linear &&
+                             descriptor.mipmapFilter == wgpu::MipmapFilterMode::Linear;
+    descriptor.maxAnisotropy = fullyLinear ? assetAnisotropy : 1u;
+    return descriptor;
+}
 
 constexpr const char *kScreenUIShader = R"(
 struct VertexInput {
@@ -409,8 +469,7 @@ bool WebScreenUIRenderer::CreatePipelineAndFontAtlas()
 
 bool WebScreenUIRenderer::CreateWorldPipelines()
 {
-    if (m_worldColorFormat == wgpu::TextureFormat::Undefined ||
-        (m_worldSampleCount != 1 && m_worldSampleCount != 4))
+    if (m_worldColorFormat == wgpu::TextureFormat::Undefined || (m_worldSampleCount != 1 && m_worldSampleCount != 4))
         return false;
     std::array<wgpu::BindGroupLayoutEntry, 3> bindings{};
     bindings[0].binding = 0;
@@ -494,8 +553,8 @@ bool WebScreenUIRenderer::CreateWorldPipelines()
     return m_worldLayout && m_worldDepthPipeline && m_worldTopPipeline;
 }
 
-wgpu::RenderPipeline WebScreenUIRenderer::ResolveMaterialPipeline(const MaterialBinding &binding,
-                                                                   bool world, bool alwaysOnTop)
+wgpu::RenderPipeline WebScreenUIRenderer::ResolveMaterialPipeline(const MaterialBinding &binding, bool world,
+                                                                  bool alwaysOnTop)
 {
     if (binding.guid.empty())
         return world ? (alwaysOnTop ? m_worldTopPipeline : m_worldDepthPipeline) : m_pipeline;
@@ -595,6 +654,40 @@ wgpu::RenderPipeline WebScreenUIRenderer::ResolveMaterialPipeline(const Material
     return cache.emplace(key, pipeline).first->second;
 }
 
+std::pair<wgpu::Sampler, std::string> WebScreenUIRenderer::ResolveMaterialSampler(const MaterialBinding &binding,
+                                                                                  uint64_t textureId)
+{
+    const auto texture = m_textures.find(textureId);
+    if (textureId != kFontTextureId && texture == m_textures.end())
+        return {};
+    const wgpu::Sampler inherited = textureId == kFontTextureId ? m_fontSampler : texture->second.sampler;
+    std::string key = std::to_string(textureId);
+    if (binding.guid.empty())
+        return {inherited, key};
+    const auto material = AssetRegistry::Instance().GetAsset<InxMaterial>(binding.guid);
+    if (!material || material->IsDeleted() || material->GetVersion() != binding.generation)
+        throw std::runtime_error("UI material GUID is missing or its generation changed: " + binding.guid);
+    const MaterialTextureSampler *override = material->GetTextureSampler("texSampler");
+    if (!override || !override->HasOverrides())
+        return {inherited, key};
+    key.push_back(':');
+    for (const auto value : {static_cast<uint8_t>(override->minFilter), static_cast<uint8_t>(override->magFilter),
+                             static_cast<uint8_t>(override->mipFilter), static_cast<uint8_t>(override->addressU),
+                             static_cast<uint8_t>(override->addressV), static_cast<uint8_t>(override->addressW)})
+        key.push_back(static_cast<char>('0' + value));
+    if (const auto cached = m_materialSamplers.find(key); cached != m_materialSamplers.end())
+        return {cached->second, key};
+    const std::string filterMode = textureId == kFontTextureId ? "bilinear" : texture->second.filterMode;
+    const std::string wrapMode = textureId == kFontTextureId ? "clamp" : texture->second.wrapMode;
+    const int anisoLevel = textureId == kFontTextureId ? 1 : texture->second.anisoLevel;
+    auto descriptor = UISamplerDescriptor(filterMode, wrapMode, anisoLevel, *override);
+    descriptor.lodMaxClamp = static_cast<float>(textureId == kFontTextureId ? 0 : texture->second.mipLevels - 1);
+    const auto sampler = m_device.CreateSampler(&descriptor);
+    if (!sampler)
+        throw std::runtime_error("WebGPU rejected UI material texture sampler: " + binding.guid);
+    return {m_materialSamplers.emplace(key, sampler).first->second, key};
+}
+
 ImDrawList *WebScreenUIRenderer::DrawList(int list) const
 {
     switch (list) {
@@ -654,9 +747,8 @@ void WebScreenUIRenderer::PopClipRect(int list)
 }
 
 void WebScreenUIRenderer::SetMaterialBinding(int list, const std::string &guid, uint64_t generation,
-                                             const std::string &pipelineKey,
-                                             const std::array<float, 4> &baseColor, bool alphaClipEnabled,
-                                             float alphaClipThreshold)
+                                             const std::string &pipelineKey, const std::array<float, 4> &baseColor,
+                                             bool alphaClipEnabled, float alphaClipThreshold)
 {
     ImDrawList *draw = DrawList(list);
     if (!draw)
@@ -666,9 +758,8 @@ void WebScreenUIRenderer::SetMaterialBinding(int list, const std::string &guid, 
         throw std::invalid_argument("UI material binding requires GUID, generation and diagnostic key");
     auto &current = m_currentBindings[static_cast<size_t>(list)];
     MaterialBinding next{guid, generation, pipelineKey, baseColor, alphaClipEnabled, alphaClipThreshold};
-    if (current.guid == next.guid && current.generation == next.generation &&
-        current.pipelineKey == next.pipelineKey && current.baseColor == next.baseColor &&
-        current.alphaClipEnabled == next.alphaClipEnabled &&
+    if (current.guid == next.guid && current.generation == next.generation && current.pipelineKey == next.pipelineKey &&
+        current.baseColor == next.baseColor && current.alphaClipEnabled == next.alphaClipEnabled &&
         current.alphaClipThreshold == next.alphaClipThreshold)
         return;
     // ImDrawList otherwise merges consecutive commands with the same texture
@@ -678,9 +769,8 @@ void WebScreenUIRenderer::SetMaterialBinding(int list, const std::string &guid, 
     current = std::move(next);
 }
 
-void WebScreenUIRenderer::BeginWorldElement(const std::array<float, 16> &localToWorld, float pivotX,
-                                            float pivotY, uint32_t layer, bool alwaysOnTop,
-                                            bool billboard, bool constantScreenSize,
+void WebScreenUIRenderer::BeginWorldElement(const std::array<float, 16> &localToWorld, float pivotX, float pivotY,
+                                            uint32_t layer, bool alwaysOnTop, bool billboard, bool constantScreenSize,
                                             uint64_t ignoredOccluderId)
 {
     if (m_worldElementOpen || !m_world)
@@ -753,9 +843,9 @@ void WebScreenUIRenderer::AddText(int list, float minX, float minY, float maxX, 
     if (!draw || text.empty())
         return;
     ImGui::SetCurrentContext(m_context);
-    const textlayout::TextLayoutResult layout = textlayout::LayoutText(
-        {text, fontPath, textlayout::ResolveFontSize(fontSize), wrapWidth, lineHeight, letterSpacing,
-         fallbackFontPaths});
+    const textlayout::TextLayoutResult layout =
+        textlayout::LayoutText({text, fontPath, textlayout::ResolveFontSize(fontSize), wrapWidth, lineHeight,
+                                letterSpacing, fallbackFontPaths});
     const int firstVertex = draw->VtxBuffer.Size;
     if (clip)
         draw->PushClipRect({minX, minY}, {maxX, maxY}, true);
@@ -775,52 +865,61 @@ std::pair<float, float> WebScreenUIRenderer::MeasureText(const std::string &text
                                                          const std::vector<std::string> &fallbackFontPaths) const
 {
     ImGui::SetCurrentContext(m_context);
-    const textlayout::TextLayoutResult layout = textlayout::LayoutText(
-        {text, fontPath, textlayout::ResolveFontSize(fontSize), wrapWidth, lineHeight, letterSpacing,
-         fallbackFontPaths});
+    const textlayout::TextLayoutResult layout =
+        textlayout::LayoutText({text, fontPath, textlayout::ResolveFontSize(fontSize), wrapWidth, lineHeight,
+                                letterSpacing, fallbackFontPaths});
     return {layout.totalWidth, layout.totalHeight};
 }
 
-uint64_t WebScreenUIRenderer::UploadTexture(const TextureCpuData &texture, uint64_t replaceTextureId)
+uint64_t WebScreenUIRenderer::UploadTexture(const TextureCpuData &texture, uint64_t replaceTextureId,
+                                            const std::string &filterMode, const std::string &wrapMode, int anisoLevel)
 {
     if (!m_device || !m_queue || texture.dimension != TextureDimension::Texture2D || !texture.IsValid())
         return 0;
     const wgpu::TextureFormat format = ToWebTextureFormat(texture.format);
     if (format == wgpu::TextureFormat::Undefined)
         return 0;
-    const TextureMipLevel &mip = texture.mipLevels.front();
-    if (mip.width == 0 || mip.height == 0 || mip.depth != 1 || mip.byteOffset > texture.bytes.size() ||
-        mip.byteSize > texture.bytes.size() - mip.byteOffset || mip.rowPitch > std::numeric_limits<uint32_t>::max())
+    if (texture.mipLevels.size() > std::numeric_limits<uint32_t>::max())
         return 0;
+    const TextureMipLevel &baseMip = texture.mipLevels.front();
+    for (const TextureMipLevel &mip : texture.mipLevels)
+        if (mip.width == 0 || mip.height == 0 || mip.depth != 1 || mip.byteOffset > texture.bytes.size() ||
+            mip.byteSize > texture.bytes.size() - mip.byteOffset || mip.rowPitch > std::numeric_limits<uint32_t>::max())
+            return 0;
 
     wgpu::TextureDescriptor descriptor;
     descriptor.dimension = wgpu::TextureDimension::e2D;
-    descriptor.size = {mip.width, mip.height, 1};
+    descriptor.size = {baseMip.width, baseMip.height, 1};
     descriptor.format = format;
-    descriptor.mipLevelCount = 1;
+    descriptor.mipLevelCount = static_cast<uint32_t>(texture.mipLevels.size());
     descriptor.sampleCount = 1;
     descriptor.usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding;
     GPUTexture gpu;
+    gpu.filterMode = filterMode;
+    gpu.wrapMode = wrapMode;
+    gpu.anisoLevel = anisoLevel;
+    gpu.mipLevels = descriptor.mipLevelCount;
     gpu.texture = m_device.CreateTexture(&descriptor);
     gpu.view = gpu.texture ? gpu.texture.CreateView() : wgpu::TextureView{};
 
-    wgpu::SamplerDescriptor samplerDescriptor;
-    samplerDescriptor.addressModeU = wgpu::AddressMode::ClampToEdge;
-    samplerDescriptor.addressModeV = wgpu::AddressMode::ClampToEdge;
-    samplerDescriptor.minFilter = wgpu::FilterMode::Linear;
-    samplerDescriptor.magFilter = wgpu::FilterMode::Linear;
+    auto samplerDescriptor = UISamplerDescriptor(filterMode, wrapMode, anisoLevel, {});
+    samplerDescriptor.lodMaxClamp = static_cast<float>(descriptor.mipLevelCount - 1);
     gpu.sampler = m_device.CreateSampler(&samplerDescriptor);
     if (!gpu.texture || !gpu.view || !gpu.sampler)
         return 0;
 
-    wgpu::TexelCopyTextureInfo destination;
-    destination.texture = gpu.texture;
-    wgpu::TexelCopyBufferLayout layout;
-    layout.bytesPerRow = static_cast<uint32_t>(mip.rowPitch);
-    layout.rowsPerImage = mip.height;
-    const wgpu::Extent3D extent{mip.width, mip.height, 1};
-    m_queue.WriteTexture(&destination, texture.bytes.data() + mip.byteOffset, static_cast<size_t>(mip.byteSize),
-                         &layout, &extent);
+    for (uint32_t level = 0; level < descriptor.mipLevelCount; ++level) {
+        const TextureMipLevel &mip = texture.mipLevels[level];
+        wgpu::TexelCopyTextureInfo destination;
+        destination.texture = gpu.texture;
+        destination.mipLevel = level;
+        wgpu::TexelCopyBufferLayout layout;
+        layout.bytesPerRow = static_cast<uint32_t>(mip.rowPitch);
+        layout.rowsPerImage = mip.height;
+        const wgpu::Extent3D extent{mip.width, mip.height, 1};
+        m_queue.WriteTexture(&destination, texture.bytes.data() + mip.byteOffset, static_cast<size_t>(mip.byteSize),
+                             &layout, &extent);
+    }
 
     std::array<wgpu::BindGroupEntry, 2> entries{};
     entries[0].binding = 0;
@@ -836,6 +935,8 @@ uint64_t WebScreenUIRenderer::UploadTexture(const TextureCpuData &texture, uint6
         return 0;
 
     const uint64_t id = replaceTextureId > kFontTextureId ? replaceTextureId : m_nextTextureId++;
+    if (replaceTextureId > kFontTextureId)
+        m_materialSamplers.clear();
     m_textures.insert_or_assign(id, std::move(gpu));
     m_cacheValid = false;
     return id;
@@ -847,6 +948,7 @@ void WebScreenUIRenderer::ReleaseTexture(uint64_t textureId)
         return;
     if (m_textures.erase(textureId) != 0)
         m_cacheValid = false;
+    m_materialSamplers.clear();
 }
 
 bool WebScreenUIRenderer::EnsureBuffer(wgpu::Buffer &buffer, uint64_t &capacity, uint64_t required,
@@ -900,7 +1002,7 @@ bool WebScreenUIRenderer::Render(wgpu::RenderPassEncoder pass, int list, uint32_
     pass.SetVertexBuffer(0, m_vertexBuffer, 0, vertexBytes);
     pass.SetIndexBuffer(m_indexBuffer, sizeof(ImDrawIdx) == 2 ? wgpu::IndexFormat::Uint16 : wgpu::IndexFormat::Uint32,
                         0, indexBytes);
-    std::unordered_map<uint64_t, wgpu::BindGroup> textureGroups;
+    std::unordered_map<std::string, wgpu::BindGroup> textureGroups;
     const auto &boundaries = m_bindingBoundaries[static_cast<size_t>(list)];
     size_t boundaryIndex = 0;
     MaterialBinding binding;
@@ -918,15 +1020,14 @@ bool WebScreenUIRenderer::Render(wgpu::RenderPassEncoder pass, int list, uint32_
             continue;
         const uint64_t textureId = static_cast<uint64_t>(command.GetTexID());
         wgpu::TextureView textureView = m_fontView;
-        wgpu::Sampler sampler = m_fontSampler;
         if (textureId != kFontTextureId) {
             const auto texture = m_textures.find(textureId);
             if (texture == m_textures.end())
                 continue;
             textureView = texture->second.view;
-            sampler = texture->second.sampler;
         }
-        auto group = textureGroups.find(textureId);
+        const auto [sampler, samplerKey] = ResolveMaterialSampler(binding, textureId);
+        auto group = textureGroups.find(samplerKey);
         if (group == textureGroups.end()) {
             std::array<wgpu::BindGroupEntry, 3> entries{};
             entries[0].binding = 0;
@@ -941,7 +1042,7 @@ bool WebScreenUIRenderer::Render(wgpu::RenderPassEncoder pass, int list, uint32_
             descriptor.layout = m_screenLayout;
             descriptor.entryCount = entries.size();
             descriptor.entries = entries.data();
-            group = textureGroups.emplace(textureId, m_device.CreateBindGroup(&descriptor)).first;
+            group = textureGroups.emplace(samplerKey, m_device.CreateBindGroup(&descriptor)).first;
         }
         if (!group->second)
             return false;
@@ -971,11 +1072,11 @@ bool WebScreenUIRenderer::Render(wgpu::RenderPassEncoder pass, int list, uint32_
 }
 
 bool WebScreenUIRenderer::RenderWorld(wgpu::RenderPassEncoder pass, const glm::mat4 &viewProjection,
-                                      const glm::mat4 &view, const glm::mat4 &projection,
-                                      uint32_t cullingMask, uint32_t width, uint32_t height)
+                                      const glm::mat4 &view, const glm::mat4 &projection, uint32_t cullingMask,
+                                      uint32_t width, uint32_t height)
 {
-    if (!pass || !m_world || m_worldElements.empty() || !m_worldDepthPipeline || !m_worldTopPipeline ||
-        width == 0 || height == 0 || m_worldElementOpen)
+    if (!pass || !m_world || m_worldElements.empty() || !m_worldDepthPipeline || !m_worldTopPipeline || width == 0 ||
+        height == 0 || m_worldElementOpen)
         return false;
     if (!RefreshFontAtlas())
         return false;
@@ -1022,8 +1123,7 @@ bool WebScreenUIRenderer::RenderWorld(wgpu::RenderPassEncoder pass, const glm::m
             target.anchor[2] = anchor.z;
             target.localOffset[0] = localX;
             target.localOffset[1] = localY;
-            target.policy = static_cast<float>((span.billboard ? 1 : 0) |
-                                               (span.constantScreenSize ? 2 : 0));
+            target.policy = static_cast<float>((span.billboard ? 1 : 0) | (span.constantScreenSize ? 2 : 0));
         }
         const glm::vec4 viewAnchor = view * glm::vec4(anchor, 1.0f);
         for (int index = span.commandStart; index < span.commandEnd; ++index) {
@@ -1047,30 +1147,28 @@ bool WebScreenUIRenderer::RenderWorld(wgpu::RenderPassEncoder pass, const glm::m
     static_assert(sizeof(WorldConstants) <= constantStride);
     if (!EnsureBuffer(m_worldVertexBuffer, m_worldVertexCapacity, vertexBytes, wgpu::BufferUsage::Vertex) ||
         !EnsureBuffer(m_worldIndexBuffer, m_worldIndexCapacity, indexBytes, wgpu::BufferUsage::Index) ||
-        !EnsureBuffer(m_worldConstantsBuffer, m_worldConstantsCapacity,
-                      constantStride * draws.size(), wgpu::BufferUsage::Uniform))
+        !EnsureBuffer(m_worldConstantsBuffer, m_worldConstantsCapacity, constantStride * draws.size(),
+                      wgpu::BufferUsage::Uniform))
         return false;
     m_queue.WriteBuffer(m_worldVertexBuffer, 0, vertices.data(), vertexBytes);
     m_queue.WriteBuffer(m_worldIndexBuffer, 0, m_world->IdxBuffer.Data, indexBytes);
     pass.SetVertexBuffer(0, m_worldVertexBuffer, 0, vertexBytes);
     pass.SetIndexBuffer(m_worldIndexBuffer,
-                        sizeof(ImDrawIdx) == 2 ? wgpu::IndexFormat::Uint16 : wgpu::IndexFormat::Uint32,
-                        0, indexBytes);
+                        sizeof(ImDrawIdx) == 2 ? wgpu::IndexFormat::Uint16 : wgpu::IndexFormat::Uint32, 0, indexBytes);
     pass.SetScissorRect(0, 0, width, height);
-    std::unordered_map<uint64_t, wgpu::BindGroup> textureGroups;
+    std::unordered_map<std::string, wgpu::BindGroup> textureGroups;
     for (size_t index = 0; index < draws.size(); ++index) {
         const Draw &draw = draws[index];
         const uint64_t textureId = static_cast<uint64_t>(draw.command->GetTexID());
         wgpu::TextureView textureView = m_fontView;
-        wgpu::Sampler sampler = m_fontSampler;
         if (textureId != kFontTextureId) {
             const auto found = m_textures.find(textureId);
             if (found == m_textures.end())
                 continue;
             textureView = found->second.view;
-            sampler = found->second.sampler;
         }
-        auto group = textureGroups.find(textureId);
+        const auto [sampler, samplerKey] = ResolveMaterialSampler(draw.binding, textureId);
+        auto group = textureGroups.find(samplerKey);
         if (group == textureGroups.end()) {
             std::array<wgpu::BindGroupEntry, 3> entries{};
             entries[0].binding = 0;
@@ -1085,7 +1183,7 @@ bool WebScreenUIRenderer::RenderWorld(wgpu::RenderPassEncoder pass, const glm::m
             descriptor.layout = m_worldLayout;
             descriptor.entryCount = entries.size();
             descriptor.entries = entries.data();
-            group = textureGroups.emplace(textureId, m_device.CreateBindGroup(&descriptor)).first;
+            group = textureGroups.emplace(samplerKey, m_device.CreateBindGroup(&descriptor)).first;
         }
         if (!group->second)
             return false;
@@ -1094,8 +1192,7 @@ bool WebScreenUIRenderer::RenderWorld(wgpu::RenderPassEncoder pass, const glm::m
         constants.materialColor = glm::make_vec4(draw.binding.baseColor.data());
         constants.alphaClipEnabled = draw.binding.alphaClipEnabled ? 1.0f : 0.0f;
         constants.alphaClipThreshold = draw.binding.alphaClipThreshold;
-        constants.screenScale[0] = 2.0f / (std::max(std::abs(projection[1][1]), 1.0e-6f) *
-                                            static_cast<float>(height));
+        constants.screenScale[0] = 2.0f / (std::max(std::abs(projection[1][1]), 1.0e-6f) * static_cast<float>(height));
         constants.screenScale[1] = 0.0f;
         constants.cameraRight = glm::vec4(cameraRight, 0.0f);
         constants.cameraUp = glm::vec4(cameraUp, 0.0f);

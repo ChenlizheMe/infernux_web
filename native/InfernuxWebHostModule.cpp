@@ -27,9 +27,9 @@
 #include <function/scene/SceneManager.h>
 #endif
 
-#include <exception>
 #include <array>
 #include <cmath>
+#include <exception>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -54,6 +54,9 @@ struct ScreenUITextureLoad
     std::shared_ptr<infernux::TextureUploadStagingTicket> ticket;
     uint64_t textureId = 0;
     bool failed = false;
+    std::string filterMode = "bilinear";
+    std::string wrapMode = "clamp";
+    int anisoLevel = 1;
 };
 std::unordered_map<std::string, ScreenUITextureLoad> g_screenUITextures;
 #endif
@@ -406,9 +409,8 @@ PyObject *ScreenUISetMaterialBinding(PyObject *, PyObject *arguments)
     PyObject *colorObject = nullptr;
     int alphaClipEnabled = 0;
     double alphaClipThreshold = 0.0;
-    if (!PyArg_ParseTuple(arguments, "isKsOpd:screen_ui_set_material_binding", &list, &guid,
-                          &generation, &pipelineKey, &colorObject, &alphaClipEnabled,
-                          &alphaClipThreshold))
+    if (!PyArg_ParseTuple(arguments, "isKsOpd:screen_ui_set_material_binding", &list, &guid, &generation, &pipelineKey,
+                          &colorObject, &alphaClipEnabled, &alphaClipThreshold))
         return nullptr;
     PyObject *colors = PySequence_Fast(colorObject, "UI material color must have four components");
     if (!colors)
@@ -429,8 +431,8 @@ PyObject *ScreenUISetMaterialBinding(PyObject *, PyObject *arguments)
     try {
         if (!g_screenUIRenderer)
             throw std::logic_error("Web UI material renderer is unavailable");
-        g_screenUIRenderer->SetMaterialBinding(list, guid, generation, pipelineKey, color,
-                                               alphaClipEnabled != 0, static_cast<float>(alphaClipThreshold));
+        g_screenUIRenderer->SetMaterialBinding(list, guid, generation, pipelineKey, color, alphaClipEnabled != 0,
+                                               static_cast<float>(alphaClipThreshold));
         Py_RETURN_NONE;
     } catch (const std::exception &error) {
         PyErr_SetString(PyExc_RuntimeError, error.what());
@@ -448,9 +450,8 @@ PyObject *ScreenUIBeginWorldElement(PyObject *, PyObject *arguments)
     int billboard = 0;
     int constantScreenSize = 0;
     unsigned long long ignoredOccluderId = 0;
-    if (!PyArg_ParseTuple(arguments, "OddIpppK:screen_ui_begin_world_element", &matrixObject,
-                          &pivotX, &pivotY, &layer, &alwaysOnTop, &billboard,
-                          &constantScreenSize, &ignoredOccluderId))
+    if (!PyArg_ParseTuple(arguments, "OddIpppK:screen_ui_begin_world_element", &matrixObject, &pivotX, &pivotY, &layer,
+                          &alwaysOnTop, &billboard, &constantScreenSize, &ignoredOccluderId))
         return nullptr;
     PyObject *values = PySequence_Fast(matrixObject, "World UI transform must have 16 floats");
     if (!values)
@@ -476,10 +477,9 @@ PyObject *ScreenUIBeginWorldElement(PyObject *, PyObject *arguments)
     try {
         if (!g_screenUIRenderer)
             throw std::logic_error("Web world UI renderer is unavailable");
-        g_screenUIRenderer->BeginWorldElement(matrix, static_cast<float>(pivotX),
-                                               static_cast<float>(pivotY), layer, alwaysOnTop != 0,
-                                               billboard != 0, constantScreenSize != 0,
-                                               ignoredOccluderId);
+        g_screenUIRenderer->BeginWorldElement(matrix, static_cast<float>(pivotX), static_cast<float>(pivotY), layer,
+                                              alwaysOnTop != 0, billboard != 0, constantScreenSize != 0,
+                                              ignoredOccluderId);
         Py_RETURN_NONE;
     } catch (const std::exception &error) {
         PyErr_SetString(PyExc_RuntimeError, error.what());
@@ -508,7 +508,7 @@ PyObject *ScreenUIPushClipRect(PyObject *, PyObject *arguments)
         return nullptr;
     if (g_screenUIRenderer)
         g_screenUIRenderer->PushClipRect(list, static_cast<float>(minX), static_cast<float>(minY),
-                                        static_cast<float>(maxX), static_cast<float>(maxY));
+                                         static_cast<float>(maxX), static_cast<float>(maxY));
     Py_RETURN_NONE;
 }
 
@@ -654,12 +654,12 @@ PyObject *ScreenUIMeasureText(PyObject *, PyObject *arguments)
     std::vector<std::string> fallbackFontPaths;
     if (!ParseFallbackFontPaths(fallbackFontPathsObject, fallbackFontPaths))
         return nullptr;
-    const auto measured = g_screenUIRenderer ? g_screenUIRenderer->MeasureText(text, static_cast<float>(fontSize),
-                                                                               static_cast<float>(wrapWidth), fontPath,
-                                                                               static_cast<float>(lineHeight),
-                                                                               static_cast<float>(letterSpacing),
-                                                                               fallbackFontPaths)
-                                             : std::pair<float, float>{0.0f, 0.0f};
+    const auto measured =
+        g_screenUIRenderer
+            ? g_screenUIRenderer->MeasureText(text, static_cast<float>(fontSize), static_cast<float>(wrapWidth),
+                                              fontPath, static_cast<float>(lineHeight),
+                                              static_cast<float>(letterSpacing), fallbackFontPaths)
+            : std::pair<float, float>{0.0f, 0.0f};
     return Py_BuildValue("ff", measured.first, measured.second);
 }
 
@@ -693,12 +693,16 @@ PyObject *ScreenUIResolveTexture(PyObject *, PyObject *arguments)
                 state.failed = true;
                 return PyLong_FromLongLong(-1);
             }
+            state.filterMode = texture->GetFilterMode();
+            state.wrapMode = texture->GetWrapMode();
+            state.anisoLevel = texture->GetAnisoLevel();
             state.ticket = registry.BeginTextureUploadStaging(guid);
         }
         const auto staging = registry.TryConsumeTextureUploadStaging(state.ticket);
         if (!staging)
             return PyLong_FromLongLong(0);
-        state.textureId = g_screenUIRenderer->UploadTexture(*staging);
+        state.textureId =
+            g_screenUIRenderer->UploadTexture(*staging, 0, state.filterMode, state.wrapMode, state.anisoLevel);
         state.ticket.reset();
         if (state.textureId == 0) {
             state.failed = true;
@@ -710,8 +714,7 @@ PyObject *ScreenUIResolveTexture(PyObject *, PyObject *arguments)
                     static_cast<unsigned long long>(state.textureId));
         return PyLong_FromUnsignedLongLong(state.textureId);
     } catch (const std::exception &error) {
-        std::fprintf(stderr, "INFERNUX_WEB_SCREEN_UI_TEXTURE_FAILED guid=%s error=%s\n", guidText,
-                     error.what());
+        std::fprintf(stderr, "INFERNUX_WEB_SCREEN_UI_TEXTURE_FAILED guid=%s error=%s\n", guidText, error.what());
         return PyLong_FromLongLong(-1);
     }
 #endif

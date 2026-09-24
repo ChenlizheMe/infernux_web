@@ -1,12 +1,12 @@
 #pragma once
 
-#include <imgui.h>
 #include <glm/mat4x4.hpp>
 #include <glm/vec4.hpp>
+#include <imgui.h>
 #include <webgpu/webgpu_cpp.h>
 
-#include <cstdint>
 #include <array>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -15,7 +15,8 @@
 namespace infernux
 {
 struct TextureCpuData;
-}
+struct MaterialTextureSampler;
+} // namespace infernux
 
 namespace infernux::web
 {
@@ -37,12 +38,10 @@ class WebScreenUIRenderer final
     bool BeginFrameCached(uint32_t width, uint32_t height, uint64_t contentRevision);
     void PushClipRect(int list, float minX, float minY, float maxX, float maxY);
     void PopClipRect(int list);
-    void SetMaterialBinding(int list, const std::string &guid, uint64_t generation,
-                            const std::string &pipelineKey, const std::array<float, 4> &baseColor,
-                            bool alphaClipEnabled, float alphaClipThreshold);
-    void BeginWorldElement(const std::array<float, 16> &localToWorld, float pivotX, float pivotY,
-                           uint32_t layer, bool alwaysOnTop, bool billboard, bool constantScreenSize,
-                           uint64_t ignoredOccluderId);
+    void SetMaterialBinding(int list, const std::string &guid, uint64_t generation, const std::string &pipelineKey,
+                            const std::array<float, 4> &baseColor, bool alphaClipEnabled, float alphaClipThreshold);
+    void BeginWorldElement(const std::array<float, 16> &localToWorld, float pivotX, float pivotY, uint32_t layer,
+                           bool alwaysOnTop, bool billboard, bool constantScreenSize, uint64_t ignoredOccluderId);
     void EndWorldElement();
 
     void AddFilledRect(int list, float minX, float minY, float maxX, float maxY, float r, float g, float b, float a,
@@ -58,13 +57,14 @@ class WebScreenUIRenderer final
                                                       const std::string &fontPath, float lineHeight,
                                                       float letterSpacing,
                                                       const std::vector<std::string> &fallbackFontPaths = {}) const;
-    [[nodiscard]] uint64_t UploadTexture(const TextureCpuData &texture, uint64_t replaceTextureId = 0);
+    [[nodiscard]] uint64_t UploadTexture(const TextureCpuData &texture, uint64_t replaceTextureId = 0,
+                                         const std::string &filterMode = "bilinear",
+                                         const std::string &wrapMode = "clamp", int anisoLevel = 1);
     void ReleaseTexture(uint64_t textureId);
 
     bool Render(wgpu::RenderPassEncoder pass, int list, uint32_t width, uint32_t height);
-    bool RenderWorld(wgpu::RenderPassEncoder pass, const glm::mat4 &viewProjection,
-                     const glm::mat4 &view, const glm::mat4 &projection,
-                     uint32_t cullingMask, uint32_t width, uint32_t height);
+    bool RenderWorld(wgpu::RenderPassEncoder pass, const glm::mat4 &viewProjection, const glm::mat4 &view,
+                     const glm::mat4 &projection, uint32_t cullingMask, uint32_t width, uint32_t height);
 
   private:
     struct MaterialBinding
@@ -146,12 +146,18 @@ class WebScreenUIRenderer final
         wgpu::TextureView view;
         wgpu::Sampler sampler;
         wgpu::BindGroup group;
+        std::string filterMode = "bilinear";
+        std::string wrapMode = "clamp";
+        int anisoLevel = 1;
+        uint32_t mipLevels = 1;
     };
 
     ImDrawList *DrawList(int list) const;
     bool CreatePipelineAndFontAtlas();
     bool CreateWorldPipelines();
     wgpu::RenderPipeline ResolveMaterialPipeline(const MaterialBinding &binding, bool world, bool alwaysOnTop);
+    [[nodiscard]] std::pair<wgpu::Sampler, std::string> ResolveMaterialSampler(const MaterialBinding &binding,
+                                                                               uint64_t textureId);
     bool RefreshFontAtlas();
     bool EnsureBuffer(wgpu::Buffer &buffer, uint64_t &capacity, uint64_t required, wgpu::BufferUsage usage);
 
@@ -187,6 +193,7 @@ class WebScreenUIRenderer final
     uint64_t m_vertexCapacity = 0;
     uint64_t m_indexCapacity = 0;
     std::unordered_map<uint64_t, GPUTexture> m_textures;
+    std::unordered_map<std::string, wgpu::Sampler> m_materialSamplers;
     uint64_t m_nextTextureId = 2;
     ImGuiContext *m_context = nullptr;
     ImDrawList *m_camera = nullptr;

@@ -19,6 +19,30 @@ def test_native_texture_bridge_rejects_path_identity_fallback() -> None:
     assert "GetGuidFromPath" not in function
 
 
+def test_screen_and_world_ui_bind_groups_include_material_sampler_identity() -> None:
+    renderer = (ROOT / "native/WebScreenUIRenderer.cpp").read_text(encoding="utf-8")
+    host = (ROOT / "native/InfernuxWebHostModule.cpp").read_text(encoding="utf-8")
+    sampler = renderer.split("WebScreenUIRenderer::ResolveMaterialSampler", 1)[1].split(
+        "ImDrawList *WebScreenUIRenderer::DrawList", 1
+    )[0]
+    screen = renderer.split("bool WebScreenUIRenderer::Render(", 1)[1].split(
+        "bool WebScreenUIRenderer::RenderWorld(", 1
+    )[0]
+    world = renderer.split("bool WebScreenUIRenderer::RenderWorld(", 1)[1]
+
+    assert 'material->GetTextureSampler("texSampler")' in sampler
+    assert "key.push_back(':')" in sampler
+    assert "m_materialSamplers.emplace(key, sampler)" in sampler
+    for draw_path in (screen, world):
+        assert "std::unordered_map<std::string, wgpu::BindGroup> textureGroups" in draw_path
+        assert "ResolveMaterialSampler(" in draw_path
+        assert "textureGroups.find(samplerKey)" in draw_path
+        assert "textureGroups.emplace(samplerKey," in draw_path
+    assert "state.filterMode = texture->GetFilterMode()" in host
+    assert "state.wrapMode = texture->GetWrapMode()" in host
+    assert "state.anisoLevel = texture->GetAnisoLevel()" in host
+
+
 def test_python_texture_cache_extracts_asset_reference_guid() -> None:
     source = (ROOT / "native/bootstrap.py").read_text(encoding="utf-8")
     texture_cache = source.split("class _WebScreenUITextureCache", 1)[1].split(
