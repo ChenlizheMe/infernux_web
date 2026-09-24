@@ -1731,7 +1731,7 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
             if (Finite(forward) && glm::dot(forward, forward) > 1.0e-8f)
                 rayDirection = glm::normalize(forward);
         }
-        lightColor = inx::color::SrgbToLinear(directionalLight->GetColor());
+        lightColor = directionalLight->GetLinearColor();
         lightIntensity = directionalLight->GetIntensity();
         if (directionalLight->GetShadows() != LightShadows::None)
             shadowStrength = directionalLight->GetShadowStrength();
@@ -1753,7 +1753,7 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
             continue;
         CameraData::PunctualLightData &target = m_cameraData.punctualLights[punctualLightCount++];
         target.positionRange = glm::vec4(transform->GetWorldPosition(), light->GetRange());
-        target.colorIntensity = glm::vec4(inx::color::SrgbToLinear(light->GetColor()), light->GetIntensity());
+        target.colorIntensity = glm::vec4(light->GetLinearColor(), light->GetIntensity());
         glm::vec3 forward = transform->GetWorldForward();
         if (!Finite(forward) || glm::dot(forward, forward) < 1.0e-8f)
             forward = glm::vec3(0.0f, -1.0f, 0.0f);
