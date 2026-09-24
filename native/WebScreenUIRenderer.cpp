@@ -508,7 +508,8 @@ wgpu::RenderPipeline WebScreenUIRenderer::ResolveMaterialPipeline(const Material
         return world ? (alwaysOnTop ? m_worldTopPipeline : m_worldDepthPipeline) : m_pipeline;
     if (vertex.guid.empty() || fragment.guid.empty())
         throw std::runtime_error("UI material has an incomplete shader GUID pair: " + binding.guid);
-    const std::string key = binding.guid + ':' + std::to_string(binding.generation) +
+    const std::string key = binding.guid + ':' + std::to_string(binding.generation) + ':' +
+                            std::to_string(binding.pipelineKey.size()) + ':' + binding.pipelineKey +
                             (alwaysOnTop ? ":top" : ":depth");
     auto &cache = world ? m_customWorldPipelines : m_customScreenPipelines;
     if (const auto cached = cache.find(key); cached != cache.end())

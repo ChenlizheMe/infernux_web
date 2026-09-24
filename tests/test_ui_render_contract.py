@@ -48,6 +48,9 @@ def test_native_world_draw_is_depth_aware_and_material_shader_is_consumed():
     assert "ResolveMaterialPipeline(binding, false, false)" in renderer
     assert 'InfernuxWebFindShaderSource(vertex.shaderId, "vertex"' in renderer
     assert 'InfernuxWebFindShaderSource(fragment.shaderId, "fragment"' in renderer
+    assert "std::to_string(binding.pipelineKey.size()) + ':' + binding.pipelineKey" in renderer
+    assert 'if (ignoredOccluderId != 0)' in renderer
+    assert 'does not yet support ignored-occluder depth exclusion' in renderer
     assert "g_screenUIRenderer.RenderWorld(pass" in frame
     assert frame.index("g_screenUIRenderer.RenderWorld(pass") < frame.index("pass.End();", frame.index("g_screenUIRenderer.RenderWorld(pass"))
 
