@@ -350,6 +350,31 @@ def test_web_dependency_scan_rejects_gpu_declarations_without_kernel_compiler(
         )
 
 
+def test_web_gpu_diagnostic_preserves_class_identity_location_and_rewrite(tmp_path: Path) -> None:
+    assets = tmp_path / "Assets" / "Scripts"
+    assets.mkdir(parents=True)
+    source = assets / "Jelly.py"
+    source.write_text(
+        "import Infernux as inx\n"
+        "class Jelly:\n"
+        "    @staticmethod\n"
+        "    @inx.compute.kernel\n"
+        "    def step(domain):\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as error:
+        _reject_unshipped_web_dependencies(
+            _python_sources(tmp_path), _player_manifest_with_numpy()
+        )
+    message = str(error.value)
+    assert "Jelly.step" in message
+    assert f"{source}:5:5" in message
+    assert "Rewrite: remove @inx.compute.kernel/@inx.compute.function" in message
+    assert "no Python-to-WebGPU kernel compiler" in message
+
+
 def test_web_dependency_scan_uses_only_frozen_player_sources(tmp_path: Path) -> None:
     runtime = tmp_path / "Assets" / "Scripts" / "Gameplay.py"
     runtime.parent.mkdir(parents=True)
