@@ -29,6 +29,7 @@ from Infernux.engine.build import (
     PlatformExporter,
 )
 from Infernux._compiler.kernel_contract import (
+    implicit_receiver_attribute,
     implicit_receiver_name,
     kernel_diagnostic,
     source_module_name,
@@ -557,6 +558,25 @@ def _reject_unshipped_web_dependencies(
                             "(decorator order: @staticmethod, then "
                             "@inx.compute.kernel) or move the kernel to module scope"
                         ),
+                    ))
+                access = implicit_receiver_attribute(item["node"])
+                if access is not None:
+                    receiver_name, attribute = access
+                    raise ValueError(kernel_diagnostic(
+                        source_path,
+                        str(record["qualified"]),
+                        item["node"],
+                        target="Web/Cook",
+                        reason=(
+                            "class-contained kernels cannot access unbound "
+                            f"receiver field '{receiver_name}.{attribute.attr}'"
+                        ),
+                        advice=(
+                            "pass the required scalar or inx.buffer explicitly, "
+                            "or put @staticmethod above @inx.compute.kernel"
+                        ),
+                        line=attribute.lineno,
+                        column=attribute.col_offset + 1,
                     ))
                 record.pop("node", None)
                 checked.append(record)

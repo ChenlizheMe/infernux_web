@@ -401,6 +401,32 @@ def test_web_kernel_contract_fixture_reports_implicit_receiver_with_identity(tmp
     assert "@staticmethod" in message
 
 
+def test_web_kernel_contract_fixture_reports_unbound_receiver_field_location(tmp_path: Path) -> None:
+    assets = tmp_path / "Assets" / "Scripts"
+    assets.mkdir(parents=True)
+    source = assets / "InvalidField.py"
+    source.write_text(
+        "import infernux as inx\n"
+        "class JellyKernel:\n"
+        "    @staticmethod\n"
+        "    @inx.compute.kernel\n"
+        "    def step(domain):\n"
+        "        index = inx.compute.index(domain)\n"
+        "        domain[index] = self.scale\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as error:
+        _reject_unshipped_web_dependencies(
+            _python_sources(tmp_path), _player_manifest_with_numpy()
+        )
+    message = str(error.value)
+    assert "Scripts.InvalidField.JellyKernel.step" in message
+    assert f"{source}:7:25" in message
+    assert "target 'Web/Cook'" in message
+    assert "unbound receiver field 'self.scale'" in message
+    assert "pass the required scalar or inx.buffer explicitly" in message
+
+
 def test_web_dependency_scan_uses_only_frozen_player_sources(tmp_path: Path) -> None:
     runtime = tmp_path / "Assets" / "Scripts" / "Gameplay.py"
     runtime.parent.mkdir(parents=True)
