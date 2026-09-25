@@ -369,10 +369,36 @@ def test_web_gpu_diagnostic_preserves_class_identity_location_and_rewrite(tmp_pa
             _python_sources(tmp_path), _player_manifest_with_numpy()
         )
     message = str(error.value)
-    assert "Jelly.step" in message
+    assert "Scripts.Jelly.Jelly.step" in message
     assert f"{source}:5:5" in message
+    assert "target='Web/Cook'" in message
     assert "Rewrite: remove @inx.compute.kernel/@inx.compute.function" in message
     assert "no Python-to-WebGPU kernel compiler" in message
+
+
+def test_web_kernel_contract_fixture_reports_implicit_receiver_with_identity(tmp_path: Path) -> None:
+    assets = tmp_path / "Assets" / "Scripts"
+    assets.mkdir(parents=True)
+    source = assets / "InvalidInstance.py"
+    source.write_text(
+        "import infernux as inx\n"
+        "class JellyKernel:\n"
+        "    @inx.compute.kernel\n"
+        "    def step(self, domain):\n"
+        "        index = inx.compute.index(domain)\n"
+        "        domain[index] = 1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as error:
+        _reject_unshipped_web_dependencies(
+            _python_sources(tmp_path), _player_manifest_with_numpy()
+        )
+    message = str(error.value)
+    assert "Scripts.InvalidInstance.JellyKernel.step" in message
+    assert f"{source}:4:5" in message
+    assert "target 'Web/Cook'" in message
+    assert "implicit instance receiver 'self'" in message
+    assert "@staticmethod" in message
 
 
 def test_web_dependency_scan_uses_only_frozen_player_sources(tmp_path: Path) -> None:

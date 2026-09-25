@@ -28,6 +28,11 @@ from Infernux.engine.build import (
     PlatformCapabilities,
     PlatformExporter,
 )
+from Infernux._compiler.kernel_contract import (
+    implicit_receiver_name,
+    kernel_diagnostic,
+    source_module_name,
+)
 
 from .doctor import inspect_web_toolchain
 from .native_payload import inspect_python_runtime
@@ -528,7 +533,34 @@ def _reject_unshipped_web_dependencies(
 
         declarations = _web_gpu_declaration_records(tree)
         if declarations:
-            gpu_declarations[str(source_path)] = declarations
+            module_name = source_module_name(source_path)
+            checked: list[dict[str, object]] = []
+            for item in declarations:
+                record = dict(item)
+                record["module"] = module_name
+                record["qualified"] = f"{module_name}.{item['qualified']}"
+                receiver = implicit_receiver_name(
+                    item["node"], in_class=bool(item.get("in_class", False))
+                )
+                if receiver is not None:
+                    raise ValueError(kernel_diagnostic(
+                        source_path,
+                        str(record["qualified"]),
+                        item["node"],
+                        target="Web/Cook",
+                        reason=(
+                            "class-contained kernels cannot use an implicit "
+                            f"instance receiver '{receiver}'"
+                        ),
+                        advice=(
+                            "put @staticmethod above @inx.compute.kernel "
+                            "(decorator order: @staticmethod, then "
+                            "@inx.compute.kernel) or move the kernel to module scope"
+                        ),
+                    ))
+                record.pop("node", None)
+                checked.append(record)
+            gpu_declarations[str(source_path)] = tuple(checked)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 names = (alias.name.split(".", 1)[0] for alias in node.names)
@@ -555,6 +587,7 @@ def _reject_unshipped_web_dependencies(
             "Web Player cannot execute source-authored GPU compute declarations: "
             + ", ".join(names)
             + f" (source: {sources}; declarations: {locations})"
+            + " [target='Web/Cook'; reason='no Python-to-WebGPU kernel compiler']"
             + ". The Web target has no Python-to-WebGPU kernel compiler; "
             "shipping these declarations as ordinary Python would change their semantics. "
             "Rewrite: remove @inx.compute.kernel/@inx.compute.function from Web source, "
@@ -592,6 +625,7 @@ def _web_gpu_declaration_records(tree: ast.Module) -> tuple[dict[str, object], .
     class PathCollector(ast.NodeVisitor):
         def __init__(self) -> None:
             self.classes: list[str] = []
+            self.class_scopes: dict[int, bool] = {}
 
         def visit_ClassDef(self, node: ast.ClassDef) -> None:
             self.classes.append(node.name)
@@ -600,11 +634,14 @@ def _web_gpu_declaration_records(tree: ast.Module) -> tuple[dict[str, object], .
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
             qualified_paths[id(node)] = ".".join((*self.classes, node.name))
+            self.class_scopes[id(node)] = bool(self.classes)
             self.generic_visit(node)
 
         visit_AsyncFunctionDef = visit_FunctionDef
 
-    PathCollector().visit(tree)
+    path_collector = PathCollector()
+    path_collector.visit(tree)
+    class_scopes = path_collector.class_scopes
 
     class Scope:
         def __init__(self, parent: "Scope | None" = None) -> None:
@@ -795,6 +832,8 @@ def _web_gpu_declaration_records(tree: ast.Module) -> tuple[dict[str, object], .
             "qualified": qualified_paths.get(id(node), name),
             "line": int(node.lineno),
             "column": int(node.col_offset + 1),
+            "in_class": class_scopes.get(id(node), False),
+            "node": node,
         }
         for name, node in declaration_nodes
     )
