@@ -514,7 +514,7 @@ def _reject_unshipped_web_dependencies(
 
     missing: set[str] = set()
     unsupported: set[str] = set()
-    gpu_declarations: dict[str, set[str]] = {}
+    gpu_declarations: dict[str, tuple[dict[str, object], ...]] = {}
     for source_value in python_sources:
         source_path = Path(source_value).resolve()
         if not source_path.is_file() or source_path.suffix.casefold() != ".py":
@@ -526,7 +526,7 @@ def _reject_unshipped_web_dependencies(
         except (OSError, SyntaxError) as error:
             raise ValueError(f"Web dependency scan failed for {source_path}: {error}") from error
 
-        declarations = _web_gpu_declarations(tree)
+        declarations = _web_gpu_declaration_records(tree)
         if declarations:
             gpu_declarations[str(source_path)] = declarations
         for node in ast.walk(tree):
@@ -542,16 +542,24 @@ def _reject_unshipped_web_dependencies(
                 elif name == "numpy" and name not in provided_imports:
                     missing.add(name)
     if gpu_declarations:
-        names = sorted(
-            {name for declarations in gpu_declarations.values() for name in declarations}
-        )
+        names = sorted({str(item["name"]) for records in gpu_declarations.values() for item in records})
         sources = ", ".join(sorted(gpu_declarations))
+        locations = ", ".join(
+            sorted(
+                f"{item['qualified']} at {path}:{item['line']}:{item['column']}"
+                for path, records in gpu_declarations.items()
+                for item in records
+            )
+        )
         raise ValueError(
             "Web Player cannot execute source-authored GPU compute declarations: "
             + ", ".join(names)
-            + f" (source: {sources})"
+            + f" (source: {sources}; declarations: {locations})"
             + ". The Web target has no Python-to-WebGPU kernel compiler; "
-            "shipping these declarations as ordinary Python would change their semantics."
+            "shipping these declarations as ordinary Python would change their semantics. "
+            "Rewrite: remove @inx.compute.kernel/@inx.compute.function from Web source, "
+            "move the declaration to a Desktop/Android compute script, or use a "
+            "Web-compatible CPU/WebGPU API."
         )
     if unsupported or missing:
         unavailable = sorted(unsupported | missing)
@@ -569,14 +577,34 @@ def _reject_unshipped_web_dependencies(
         )
 
 
-def _web_gpu_declarations(tree: ast.Module) -> set[str]:
-    """Resolve GPU decorator aliases conservatively without executing code."""
+def _web_gpu_declaration_records(tree: ast.Module) -> tuple[dict[str, object], ...]:
+    """Resolve GPU aliases and retain qualified source locations."""
 
     gpu_decorators = {
         "infernux.compute.kernel",
         "infernux.compute.function",
     }
     declarations: set[str] = set()
+    declaration_nodes: list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef]] = []
+
+    qualified_paths: dict[int, str] = {}
+
+    class PathCollector(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.classes: list[str] = []
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self.classes.append(node.name)
+            self.generic_visit(node)
+            self.classes.pop()
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            qualified_paths[id(node)] = ".".join((*self.classes, node.name))
+            self.generic_visit(node)
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+    PathCollector().visit(tree)
 
     class Scope:
         def __init__(self, parent: "Scope | None" = None) -> None:
@@ -701,6 +729,7 @@ def _web_gpu_declarations(tree: ast.Module) -> set[str]:
                         for candidate in scope.canonical(target)
                     ):
                         declarations.add(statement.name)
+                        declaration_nodes.append((statement.name, statement))
                 scan_body(statement.body, Scope(scope))
                 scope.bind_name(statement.name, frozenset({statement.name}))
                 continue
@@ -760,7 +789,20 @@ def _web_gpu_declarations(tree: ast.Module) -> set[str]:
                 scope.merge(branches)
 
     scan_body(tree.body, Scope())
-    return declarations
+    return tuple(
+        {
+            "name": name,
+            "qualified": qualified_paths.get(id(node), name),
+            "line": int(node.lineno),
+            "column": int(node.col_offset + 1),
+        }
+        for name, node in declaration_nodes
+    )
+
+
+def _web_gpu_declarations(tree: ast.Module) -> set[str]:
+    """Return declaration names for callers that only need membership."""
+    return {str(item["name"]) for item in _web_gpu_declaration_records(tree)}
 
 
 def _stage_web_branding(
