@@ -467,7 +467,7 @@ target_compile_options(InfernuxWebPlayerHost PRIVATE
     "-sUSE_BZIP2=1"
     "-sUSE_SQLITE3=1"
 )
-if(INFERNUX_WEB_ENGINE_RUNTIME)
+if(INFERNUX_WEB_LINK_ENGINE_RUNTIME)
     # Scene loading crosses the embedded Python C API and native scene
     # deserializers. Keep C++ exceptions enabled at this boundary so a
     # malformed cooked scene becomes a normal Web Player error with its
