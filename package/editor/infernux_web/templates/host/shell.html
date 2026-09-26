@@ -414,8 +414,16 @@
       onAbort(reason) {
         canvasNode.dataset.infernuxState = 'aborted';
         loaderNode.classList.remove('hidden', 'indeterminate');
-        statusNode.textContent = `Player stopped: ${reason}`;
-        loaderHintNode.textContent = 'Open the browser console for details.';
+        const openedFromFile = window.location.protocol === 'file:';
+        statusNode.textContent = openedFromFile
+          ? 'Open this page through HTTP, not file://'
+          : `Player stopped: ${reason}`;
+        loaderHintNode.textContent = openedFromFile
+          ? 'Start a local HTTP server in this folder, then open the http:// address.'
+          : 'Open the browser console for details.';
+        if (openedFromFile) {
+          recordDiagnostic('INFERNUX_WEB_FILE_PROTOCOL_UNSUPPORTED');
+        }
       }
     };
   </script>
