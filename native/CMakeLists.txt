@@ -467,6 +467,13 @@ target_compile_options(InfernuxWebPlayerHost PRIVATE
     "-sUSE_BZIP2=1"
     "-sUSE_SQLITE3=1"
 )
+if(INFERNUX_WEB_ENGINE_RUNTIME)
+    # Scene loading crosses the embedded Python C API and native scene
+    # deserializers. Keep C++ exceptions enabled at this boundary so a
+    # malformed cooked scene becomes a normal Web Player error with its
+    # message, instead of an opaque Emscripten ___cxa_throw pointer.
+    target_compile_options(InfernuxWebPlayerHost PRIVATE "-fexceptions")
+endif()
 target_link_options(InfernuxWebPlayerHost PRIVATE
     "--use-port=emdawnwebgpu"
     "-sUSE_ZLIB=1"
@@ -479,6 +486,8 @@ target_link_options(InfernuxWebPlayerHost PRIVATE
     "-sFORCE_FILESYSTEM=1"
     "-sENVIRONMENT=web"
     "-sEXIT_RUNTIME=0"
+    $<$<BOOL:${INFERNUX_WEB_ENGINE_RUNTIME}>:-fexceptions>
+    $<$<BOOL:${INFERNUX_WEB_ENGINE_RUNTIME}>:-sDISABLE_EXCEPTION_CATCHING=0>
     "-sEXPORTED_RUNTIME_METHODS=['ccall','FS','addRunDependency','removeRunDependency','abort']"
     "--preload-file=${_python_assets}@/usr/local"
     "--preload-file=${_numpy_site_packages}@/usr/local/lib/python3.13/site-packages"
