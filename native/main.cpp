@@ -1158,7 +1158,22 @@ void StartSurface()
         PrintPythonError("ready-contract");
         return;
     }
-    PyObject *result = PyObject_CallOneArg(ready, details);
+    // Scene preparation crosses the Python/C++ boundary and may invoke the
+    // native scene loader.  Never let a C++ exception escape through the
+    // Python C API: on WebAssembly that becomes an opaque `___cxa_throw`
+    // pointer in the browser and leaves the page stuck at "Publishing the
+    // first frame".  Convert it to a normal Python exception so the host
+    // prints the actual failure and the page receives a useful abort reason.
+    PyObject *result = nullptr;
+    try {
+        result = PyObject_CallOneArg(ready, details);
+    } catch (const std::exception &error) {
+        std::fprintf(stderr, "INFERNUX_WEB_READY_NATIVE_EXCEPTION %s\n", error.what());
+        PyErr_SetString(PyExc_RuntimeError, error.what());
+    } catch (...) {
+        std::fprintf(stderr, "INFERNUX_WEB_READY_NATIVE_EXCEPTION unknown\n");
+        PyErr_SetString(PyExc_RuntimeError, "unknown native exception during Web Player startup");
+    }
     Py_DECREF(ready);
     if (result == nullptr) {
         Py_DECREF(details);
