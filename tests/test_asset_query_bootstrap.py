@@ -119,3 +119,53 @@ def test_web_bootstrap_binds_guid_asset_api_to_player_memfs() -> None:
     assert runtime.index("session.configure_runtime_contract(") < runtime.index(
         "session.load_scene(scene_guid)"
     )
+
+
+def test_web_audio_gesture_is_queued_until_player_scene_is_ready() -> None:
+    source = (ROOT / "native/bootstrap.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    names = {
+        "_pending_audio_activation",
+        "_player_activated",
+        "infernux_web_activate",
+        "_complete_pending_audio_activation",
+    }
+    nodes = [
+        node
+        for node in tree.body
+        if (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id in names
+                for target in node.targets
+            )
+        )
+        or (isinstance(node, ast.FunctionDef) and node.name in names)
+    ]
+    namespace: dict[str, Any] = {"_player_session": None, "_web_splash": None}
+    exec(compile(ast.Module(nodes, type_ignores=[]), "bootstrap.py", "exec"), namespace)
+    activated: list[str] = []
+    namespace["_activate_web_player_session"] = lambda: activated.append("session")
+
+    assert namespace["infernux_web_activate"](True) is True
+    assert namespace["_pending_audio_activation"] is True
+    assert activated == []
+
+    namespace["_player_session"] = object()
+    namespace["_complete_pending_audio_activation"]()
+    assert namespace["_pending_audio_activation"] is False
+    assert activated == ["session"]
+
+
+def test_web_audio_gesture_rejects_unsuccessful_browser_unlock() -> None:
+    source = (ROOT / "native/bootstrap.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    activate = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "infernux_web_activate"
+    )
+    namespace: dict[str, Any] = {"_player_session": None}
+    exec(compile(ast.Module([activate], type_ignores=[]), "bootstrap.py", "exec"), namespace)
+    with pytest.raises(RuntimeError, match="audio did not unlock"):
+        namespace["infernux_web_activate"](False)

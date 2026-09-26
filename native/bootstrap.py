@@ -29,6 +29,7 @@ _player_asset_count = 0
 _player_type_count = 0
 _player_initial_scene_name = ""
 _player_activated = False
+_pending_audio_activation = False
 _screen_width = 1
 _screen_height = 1
 _screen_ui_renderer: Any = None
@@ -1102,10 +1103,13 @@ def _web_render_effect_path(guid: str, path_hint: str) -> str:
 def infernux_web_activate(audio_ready: bool) -> bool:
     """Acknowledge the trusted browser gesture used to unlock WebAudio."""
 
+    global _pending_audio_activation
     if not audio_ready:
         raise RuntimeError("Web Player audio did not unlock from the user gesture")
     if _player_session is None:
-        raise RuntimeError("Web Player scene was not ready before audio activation")
+        _pending_audio_activation = True
+        print("INFERNUX_WEB_AUDIO_USER_ACTIVATION_QUEUED")
+        return True
     print("INFERNUX_WEB_AUDIO_USER_ACTIVATED")
     return True
 
@@ -1418,6 +1422,22 @@ def _process_screen_ui_events(delta_time: float) -> None:
     )
 
 
+def _complete_pending_audio_activation() -> None:
+    """Finish a browser gesture that arrived before scene/session readiness."""
+
+    global _pending_audio_activation
+    if not _pending_audio_activation or _player_session is None:
+        return
+    # A splash keeps the player session intentionally inactive. The normal
+    # splash-completion path activates it before retrying this handoff.
+    if _web_splash is not None:
+        return
+    if not _player_activated:
+        _activate_web_player_session()
+    _pending_audio_activation = False
+    print("INFERNUX_WEB_AUDIO_USER_ACTIVATED_DEFERRED")
+
+
 def infernux_web_tick(delta_time: float) -> bool:
     """Advance the Python side once per browser animation frame."""
 
@@ -1434,7 +1454,9 @@ def infernux_web_tick(delta_time: float) -> bool:
         _web_splash = None
         print("INFERNUX_WEB_SPLASH_COMPLETE")
         _activate_web_player_session()
+        _complete_pending_audio_activation()
         return False
+    _complete_pending_audio_activation()
     if not _player_activated:
         return False
     _player_session.tick(max(0.0, min(float(delta_time), 0.25)))
