@@ -472,7 +472,7 @@ if(INFERNUX_WEB_LINK_ENGINE_RUNTIME)
     # deserializers. Keep C++ exceptions enabled at this boundary so a
     # malformed cooked scene becomes a normal Web Player error with its
     # message, instead of an opaque Emscripten ___cxa_throw pointer.
-    target_compile_options(InfernuxWebPlayerHost PRIVATE "-fexceptions")
+    target_compile_options(InfernuxWebPlayerHost PRIVATE "-fwasm-exceptions")
 endif()
 target_link_options(InfernuxWebPlayerHost PRIVATE
     "--use-port=emdawnwebgpu"
@@ -486,8 +486,7 @@ target_link_options(InfernuxWebPlayerHost PRIVATE
     "-sFORCE_FILESYSTEM=1"
     "-sENVIRONMENT=web"
     "-sEXIT_RUNTIME=0"
-    $<$<BOOL:${INFERNUX_WEB_ENGINE_RUNTIME}>:-fexceptions>
-    $<$<BOOL:${INFERNUX_WEB_ENGINE_RUNTIME}>:-sDISABLE_EXCEPTION_CATCHING=0>
+    $<$<BOOL:${INFERNUX_WEB_ENGINE_RUNTIME}>:-fwasm-exceptions>
     "-sEXPORTED_RUNTIME_METHODS=['ccall','FS','addRunDependency','removeRunDependency','abort']"
     "--preload-file=${_python_assets}@/usr/local"
     "--preload-file=${_numpy_site_packages}@/usr/local/lib/python3.13/site-packages"
