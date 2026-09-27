@@ -521,6 +521,7 @@ def _reject_unshipped_web_dependencies(
     missing: set[str] = set()
     unsupported: set[str] = set()
     gpu_declarations: dict[str, tuple[dict[str, object], ...]] = {}
+    web_cpu_fallback_modules: set[str] = set()
     for source_value in python_sources:
         source_path = Path(source_value).resolve()
         if not source_path.is_file() or source_path.suffix.casefold() != ".py":
@@ -533,6 +534,12 @@ def _reject_unshipped_web_dependencies(
             raise ValueError(f"Web dependency scan failed for {source_path}: {error}") from error
 
         declarations = _web_gpu_declaration_records(tree)
+        # A source module may explicitly provide a deterministic Web CPU
+        # implementation while retaining Desktop/Android GPU kernels.  The
+        # marker is deliberately source-local and must be paired with a
+        # runtime branch; arbitrary kernel declarations remain rejected.
+        if _has_web_cpu_fallback_marker(tree):
+            web_cpu_fallback_modules.add(str(source_path))
         if declarations:
             module_name = source_module_name(source_path)
             checked: list[dict[str, object]] = []
@@ -593,13 +600,18 @@ def _reject_unshipped_web_dependencies(
                     unsupported.add(name)
                 elif name == "numpy" and name not in provided_imports:
                     missing.add(name)
-    if gpu_declarations:
-        names = sorted({str(item["name"]) for records in gpu_declarations.values() for item in records})
-        sources = ", ".join(sorted(gpu_declarations))
+    unsupported_gpu_declarations = {
+        path: records
+        for path, records in gpu_declarations.items()
+        if path not in web_cpu_fallback_modules
+    }
+    if unsupported_gpu_declarations:
+        names = sorted({str(item["name"]) for records in unsupported_gpu_declarations.values() for item in records})
+        sources = ", ".join(sorted(unsupported_gpu_declarations))
         locations = ", ".join(
             sorted(
                 f"{item['qualified']} at {path}:{item['line']}:{item['column']}"
-                for path, records in gpu_declarations.items()
+                for path, records in unsupported_gpu_declarations.items()
                 for item in records
             )
         )
@@ -628,6 +640,26 @@ def _reject_unshipped_web_dependencies(
             "dependency payload is required; "
             "the build was stopped before publishing an unusable Player."
         )
+
+
+def _has_web_cpu_fallback_marker(tree: ast.Module) -> bool:
+    """Return whether a module opts into its own Web CPU implementation."""
+
+    marker = "__infernux_web_cpu_fallback__"
+    for node in tree.body:
+        targets = []
+        value = None
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+            value = node.value
+        if not isinstance(value, ast.Constant) or value.value is not True:
+            continue
+        if any(isinstance(target, ast.Name) and target.id == marker for target in targets):
+            return True
+    return False
 
 
 def _web_gpu_declaration_records(tree: ast.Module) -> tuple[dict[str, object], ...]:
