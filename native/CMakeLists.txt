@@ -399,6 +399,13 @@ if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
             JPH_USE_CPU_COMPUTE
             JPH_OBJECT_STREAM
         )
+        if(INFERNUX_WEB_LINK_ENGINE_RUNTIME)
+            # Every object that can throw across the embedded Python boundary
+            # must use the same Wasm EH ABI as the host executable.  Applying
+            # the flag only to the final target leaves scene/resource objects
+            # built with a different unwinder and aborts in __cxa_begin_catch.
+            target_compile_options(${_web_binding_probe} PRIVATE "-fwasm-exceptions")
+        endif()
     endforeach()
     target_compile_definitions(InfernuxWebRuntimeBindingsProbe PRIVATE
         INFERNUX_PYBIND_WEB_PLAYER=1
