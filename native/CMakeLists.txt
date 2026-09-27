@@ -445,6 +445,13 @@ if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
             "${CMAKE_CURRENT_BINARY_DIR}/_deps/infernux-web-jolt"
             EXCLUDE_FROM_ALL
         )
+        if(TARGET Jolt)
+            # Jolt is linked into the same Wasm image as the scene/runtime
+            # objects.  Its archive must use the identical Wasm EH ABI or the
+            # final link leaves __resumeException unresolved when a physics
+            # path is pulled in by scene loading.
+            target_compile_options(Jolt PRIVATE "-fwasm-exceptions")
+        endif()
         # These object libraries compile engine translation units that include
         # Jolt headers. Consume Jolt's PUBLIC compile contract as well as its
         # archive so JPH_VERSION_ID cannot diverge from the linked library.
