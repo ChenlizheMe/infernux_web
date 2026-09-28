@@ -62,6 +62,12 @@ struct CameraData {
 @group(0) @binding(1) var shadow_map: texture_depth_2d;
 @group(0) @binding(2) var shadow_sampler: sampler_comparison;
 
+struct DrawData {
+    model: mat4x4<f32>,
+    normal: mat4x4<f32>,
+};
+@group(0) @binding(3) var<storage, read> draws: array<DrawData>;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -77,6 +83,7 @@ struct VertexInput {
     @location(11) metallic_channels: vec4<f32>,
     @location(12) smoothness_channels: vec4<f32>,
     @location(13) material_sampling: vec2<f32>,
+    @builtin(instance_index) draw_index: u32,
 };
 
 struct VertexOutput {
@@ -114,16 +121,18 @@ struct VertexOutput {
 @vertex
 fn vertex_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
-    output.position = camera.view_projection * vec4<f32>(input.position, 1.0);
-    output.normal = input.normal;
+    let draw = draws[input.draw_index];
+    let world_position = draw.model * vec4<f32>(input.position, 1.0);
+    output.position = camera.view_projection * world_position;
+    output.normal = normalize((draw.normal * vec4<f32>(input.normal, 0.0)).xyz);
     output.color = input.color;
-    output.world_position = input.position;
-    output.shadow_position = camera.light_view_projection * vec4<f32>(input.position, 1.0);
+    output.world_position = world_position.xyz;
+    output.shadow_position = camera.light_view_projection * world_position;
     output.emission = input.emission;
     output.material = input.material;
     output.surface = input.surface;
     output.uv = input.uv;
-    output.tangent = input.tangent;
+    output.tangent = vec4<f32>(normalize((draw.model * vec4<f32>(input.tangent.xyz, 0.0)).xyz), input.tangent.w);
     output.uv1 = input.uv1;
     output.texture_uv_sets0 = input.texture_uv_sets0;
     output.texture_uv_sets1 = input.texture_uv_sets1;
@@ -410,6 +419,14 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
             input.material.y, input.material.w) * shadow;
         for (var light_index = 0u; light_index < camera.light_counts.x; light_index = light_index + 1u) {
             let light = camera.punctual_lights[light_index];
+            if (light.parameters.z > 0.5) {
+                direct += evaluate_toon_light(
+                    normal, view_direction, -normalize(light.direction_outer_cos.xyz),
+                    light.color_intensity.rgb * light.color_intensity.w,
+                    surface_color.rgb, clamp(input.surface.y, 0.0, 1.0),
+                    clamp(input.surface.z, 0.0, 0.25), input.material.y, input.material.w);
+                continue;
+            }
             let to_light = light.position_range.xyz - input.world_position;
             let distance_to_light = length(to_light);
             if (distance_to_light <= 1.0e-5 || distance_to_light >= light.position_range.w) {
@@ -452,6 +469,14 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     for (var light_index = 0u; light_index < camera.light_counts.x; light_index = light_index + 1u) {
         let light = camera.punctual_lights[light_index];
+        if (light.parameters.z > 0.5) {
+            direct += evaluate_pbr_light(
+                normal, view_direction, -normalize(light.direction_outer_cos.xyz),
+                light.color_intensity.rgb * light.color_intensity.w, surface_color.rgb,
+                metallic, perceptual_roughness, roughness, f0, f90,
+                energy_compensation, specular_highlights);
+            continue;
+        }
         let to_light = light.position_range.xyz - input.world_position;
         let distance_to_light = length(to_light);
         if (distance_to_light <= 1.0e-5 || distance_to_light >= light.position_range.w) {
@@ -554,9 +579,16 @@ struct CameraData {
 };
 @group(0) @binding(0) var<uniform> camera: CameraData;
 
+struct DrawData {
+    model: mat4x4<f32>,
+    normal: mat4x4<f32>,
+};
+@group(0) @binding(1) var<storage, read> draws: array<DrawData>;
+
 @vertex
-fn vertex_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
-    return camera.light_view_projection * vec4<f32>(position, 1.0);
+fn vertex_main(@location(0) position: vec3<f32>,
+               @builtin(instance_index) draw_index: u32) -> @builtin(position) vec4<f32> {
+    return camera.light_view_projection * draws[draw_index].model * vec4<f32>(position, 1.0);
 }
 )wgsl";
 
@@ -912,7 +944,15 @@ bool WebSceneRenderer::Initialize(wgpu::Device device, wgpu::Queue queue, wgpu::
     if (!m_cameraBuffer)
         return false;
 
-    std::array<wgpu::BindGroupLayoutEntry, 3> cameraEntries{};
+    m_drawDataCapacity = sizeof(WebDrawData);
+    wgpu::BufferDescriptor drawDataBufferDescriptor;
+    drawDataBufferDescriptor.size = m_drawDataCapacity;
+    drawDataBufferDescriptor.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    m_drawDataBuffer = m_device.CreateBuffer(&drawDataBufferDescriptor);
+    if (!m_drawDataBuffer)
+        return false;
+
+    std::array<wgpu::BindGroupLayoutEntry, 4> cameraEntries{};
     cameraEntries[0].binding = 0;
     cameraEntries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
     cameraEntries[0].buffer.type = wgpu::BufferBindingType::Uniform;
@@ -924,6 +964,10 @@ bool WebSceneRenderer::Initialize(wgpu::Device device, wgpu::Queue queue, wgpu::
     cameraEntries[2].binding = 2;
     cameraEntries[2].visibility = wgpu::ShaderStage::Fragment;
     cameraEntries[2].sampler.type = wgpu::SamplerBindingType::Comparison;
+    cameraEntries[3].binding = 3;
+    cameraEntries[3].visibility = wgpu::ShaderStage::Vertex;
+    cameraEntries[3].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    cameraEntries[3].buffer.minBindingSize = sizeof(WebDrawData);
     wgpu::BindGroupLayoutDescriptor cameraLayoutDescriptor;
     cameraLayoutDescriptor.entryCount = cameraEntries.size();
     cameraLayoutDescriptor.entries = cameraEntries.data();
@@ -932,7 +976,29 @@ bool WebSceneRenderer::Initialize(wgpu::Device device, wgpu::Queue queue, wgpu::
     if (!m_cameraLayout || !CreateShadowResources() || !CreateMaterialTextureResources())
         return false;
 
-    std::array<wgpu::BindGroupEntry, 3> cameraBindings{};
+    std::array<wgpu::BindGroupLayoutEntry, 2> shadowCameraEntries{};
+    shadowCameraEntries[0].binding = 0;
+    shadowCameraEntries[0].visibility = wgpu::ShaderStage::Vertex;
+    shadowCameraEntries[0].buffer.type = wgpu::BufferBindingType::Uniform;
+    shadowCameraEntries[0].buffer.minBindingSize = sizeof(CameraData);
+    shadowCameraEntries[1].binding = 1;
+    shadowCameraEntries[1].visibility = wgpu::ShaderStage::Vertex;
+    shadowCameraEntries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    shadowCameraEntries[1].buffer.minBindingSize = sizeof(WebDrawData);
+    wgpu::BindGroupLayoutDescriptor shadowCameraLayoutDescriptor;
+    shadowCameraLayoutDescriptor.entryCount = shadowCameraEntries.size();
+    shadowCameraLayoutDescriptor.entries = shadowCameraEntries.data();
+    m_shadowCameraLayout = m_device.CreateBindGroupLayout(&shadowCameraLayoutDescriptor);
+    return m_shadowCameraLayout && CreateCameraBindGroups() && CreatePipelines();
+}
+
+bool WebSceneRenderer::CreateCameraBindGroups()
+{
+    if (!m_cameraLayout || !m_shadowCameraLayout || !m_cameraBuffer || !m_drawDataBuffer || !m_shadowView ||
+        !m_shadowSampler)
+        return false;
+
+    std::array<wgpu::BindGroupEntry, 4> cameraBindings{};
     cameraBindings[0].binding = 0;
     cameraBindings[0].buffer = m_cameraBuffer;
     cameraBindings[0].size = sizeof(CameraData);
@@ -940,32 +1006,28 @@ bool WebSceneRenderer::Initialize(wgpu::Device device, wgpu::Queue queue, wgpu::
     cameraBindings[1].textureView = m_shadowView;
     cameraBindings[2].binding = 2;
     cameraBindings[2].sampler = m_shadowSampler;
+    cameraBindings[3].binding = 3;
+    cameraBindings[3].buffer = m_drawDataBuffer;
+    cameraBindings[3].size = m_drawDataCapacity;
     wgpu::BindGroupDescriptor cameraGroupDescriptor;
     cameraGroupDescriptor.layout = m_cameraLayout;
     cameraGroupDescriptor.entryCount = cameraBindings.size();
     cameraGroupDescriptor.entries = cameraBindings.data();
     m_cameraGroup = m_device.CreateBindGroup(&cameraGroupDescriptor);
 
-    wgpu::BindGroupLayoutEntry shadowCameraEntry;
-    shadowCameraEntry.binding = 0;
-    shadowCameraEntry.visibility = wgpu::ShaderStage::Vertex;
-    shadowCameraEntry.buffer.type = wgpu::BufferBindingType::Uniform;
-    shadowCameraEntry.buffer.minBindingSize = sizeof(CameraData);
-    wgpu::BindGroupLayoutDescriptor shadowCameraLayoutDescriptor;
-    shadowCameraLayoutDescriptor.entryCount = 1;
-    shadowCameraLayoutDescriptor.entries = &shadowCameraEntry;
-    m_shadowCameraLayout = m_device.CreateBindGroupLayout(&shadowCameraLayoutDescriptor);
-
-    wgpu::BindGroupEntry shadowCameraBinding;
-    shadowCameraBinding.binding = 0;
-    shadowCameraBinding.buffer = m_cameraBuffer;
-    shadowCameraBinding.size = sizeof(CameraData);
+    std::array<wgpu::BindGroupEntry, 2> shadowCameraBindings{};
+    shadowCameraBindings[0].binding = 0;
+    shadowCameraBindings[0].buffer = m_cameraBuffer;
+    shadowCameraBindings[0].size = sizeof(CameraData);
+    shadowCameraBindings[1].binding = 1;
+    shadowCameraBindings[1].buffer = m_drawDataBuffer;
+    shadowCameraBindings[1].size = m_drawDataCapacity;
     wgpu::BindGroupDescriptor shadowCameraGroupDescriptor;
     shadowCameraGroupDescriptor.layout = m_shadowCameraLayout;
-    shadowCameraGroupDescriptor.entryCount = 1;
-    shadowCameraGroupDescriptor.entries = &shadowCameraBinding;
+    shadowCameraGroupDescriptor.entryCount = shadowCameraBindings.size();
+    shadowCameraGroupDescriptor.entries = shadowCameraBindings.data();
     m_shadowCameraGroup = m_device.CreateBindGroup(&shadowCameraGroupDescriptor);
-    return m_cameraGroup && m_shadowCameraLayout && m_shadowCameraGroup && CreatePipelines();
+    return m_cameraGroup && m_shadowCameraGroup;
 }
 
 bool WebSceneRenderer::CreateShadowResources()
@@ -1306,26 +1368,33 @@ bool WebSceneRenderer::CreatePipelines()
     pipelineDescriptor.vertex.buffers = &vertexLayout;
     pipelineDescriptor.fragment = &fragment;
     pipelineDescriptor.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
-    pipelineDescriptor.primitive.frontFace = wgpu::FrontFace::CW;
-    pipelineDescriptor.primitive.cullMode = wgpu::CullMode::None;
     pipelineDescriptor.depthStencil = &depth;
     pipelineDescriptor.multisample.count = m_sceneSampleCount;
-    m_opaquePipeline = m_device.CreateRenderPipeline(&pipelineDescriptor);
-    if (!m_opaquePipeline)
-        return false;
-
     wgpu::BlendState transparentBlend;
     transparentBlend.color.srcFactor = wgpu::BlendFactor::SrcAlpha;
     transparentBlend.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
     transparentBlend.alpha.srcFactor = wgpu::BlendFactor::One;
     transparentBlend.alpha.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
-    colorTarget.blend = &transparentBlend;
-    depth.depthWriteEnabled = wgpu::OptionalBool::False;
-    m_transparentPipeline = m_device.CreateRenderPipeline(&pipelineDescriptor);
-    colorTarget.blend = nullptr;
-    depth.depthWriteEnabled = wgpu::OptionalBool::True;
-    if (!m_transparentPipeline)
-        return false;
+    const std::array<wgpu::FrontFace, 2> frontFaces = {wgpu::FrontFace::CCW, wgpu::FrontFace::CW};
+    const std::array<wgpu::CullMode, 3> cullModes = {wgpu::CullMode::None, wgpu::CullMode::Front,
+                                                    wgpu::CullMode::Back};
+    for (size_t face = 0; face < frontFaces.size(); ++face) {
+        for (size_t cull = 0; cull < cullModes.size(); ++cull) {
+            const size_t pipelineIndex = face * cullModes.size() + cull;
+            pipelineDescriptor.primitive.frontFace = frontFaces[face];
+            pipelineDescriptor.primitive.cullMode = cullModes[cull];
+            m_opaquePipelines[pipelineIndex] = m_device.CreateRenderPipeline(&pipelineDescriptor);
+            if (!m_opaquePipelines[pipelineIndex])
+                return false;
+            colorTarget.blend = &transparentBlend;
+            depth.depthWriteEnabled = wgpu::OptionalBool::False;
+            m_transparentPipelines[pipelineIndex] = m_device.CreateRenderPipeline(&pipelineDescriptor);
+            colorTarget.blend = nullptr;
+            depth.depthWriteEnabled = wgpu::OptionalBool::True;
+            if (!m_transparentPipelines[pipelineIndex])
+                return false;
+        }
+    }
 
     wgpu::ShaderSourceWGSL skyShaderSource;
     skyShaderSource.code = kSkyShader;
@@ -1373,11 +1442,18 @@ bool WebSceneRenderer::CreatePipelines()
     shadowPipelineDescriptor.vertex.bufferCount = 1;
     shadowPipelineDescriptor.vertex.buffers = &vertexLayout;
     shadowPipelineDescriptor.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
-    shadowPipelineDescriptor.primitive.frontFace = wgpu::FrontFace::CW;
-    shadowPipelineDescriptor.primitive.cullMode = wgpu::CullMode::None;
     shadowPipelineDescriptor.depthStencil = &shadowDepth;
-    m_shadowPipeline = m_device.CreateRenderPipeline(&shadowPipelineDescriptor);
-    return m_skyPipeline && m_shadowPipeline;
+    for (size_t face = 0; face < frontFaces.size(); ++face) {
+        for (size_t cull = 0; cull < cullModes.size(); ++cull) {
+            const size_t pipelineIndex = face * cullModes.size() + cull;
+            shadowPipelineDescriptor.primitive.frontFace = frontFaces[face];
+            shadowPipelineDescriptor.primitive.cullMode = cullModes[cull];
+            m_shadowPipelines[pipelineIndex] = m_device.CreateRenderPipeline(&shadowPipelineDescriptor);
+            if (!m_shadowPipelines[pipelineIndex])
+                return false;
+        }
+    }
+    return static_cast<bool>(m_skyPipeline);
 }
 
 void WebSceneRenderer::Resize(uint32_t width, uint32_t height)
@@ -1475,19 +1551,56 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
 
     camera->SetAspectRatio(static_cast<float>(width) / static_cast<float>(std::max(1u, height)));
     const size_t visibleCount = m_extractor.ExtractCameraFrame(m_world, camera);
-    if (visibleCount == 0) {
-        ReportFrameIssue("no-visible-renderers");
-        return false;
-    }
     const auto frame = m_world.Acquire();
     if (!frame || !frame->PrimaryView().valid) {
         ReportFrameIssue("invalid-render-snapshot");
         return false;
     }
 
+    const SceneEnvironmentSettings &environment = scene->GetEnvironment();
+    m_cameraData = {};
+    m_cameraData.viewProjection = ToWebClipSpace(frame->PrimaryView().viewProjection);
+    m_cameraData.inverseViewProjection = glm::inverse(m_cameraData.viewProjection);
+    m_cameraData.cameraPosition = glm::vec4(frame->PrimaryView().position, 1.0f);
+    m_cameraData.skyTopExposure =
+        glm::vec4(inx::color::SrgbToLinear(environment.skyTopColor), environment.skyExposure);
+    m_cameraData.skyHorizon = glm::vec4(inx::color::SrgbToLinear(environment.skyHorizonColor), 1.0f);
+    m_cameraData.skyGround = glm::vec4(inx::color::SrgbToLinear(environment.skyGroundColor), 1.0f);
+    m_drawSky = m_diagnosticSkyEnabled && camera->GetClearFlags() == CameraClearFlags::Skybox;
+
+    using AmbientSource = SceneEnvironmentSettings::AmbientSource;
+    switch (static_cast<AmbientSource>(environment.ambientSource)) {
+    case AmbientSource::Color:
+        m_cameraData.ambient =
+            glm::vec4(inx::color::SrgbToLinear(environment.ambientColor), environment.ambientIntensity);
+        m_cameraData.ambientEquator.w = 0.0f;
+        break;
+    case AmbientSource::Gradient:
+        m_cameraData.ambientSky =
+            glm::vec4(inx::color::SrgbToLinear(environment.ambientSkyColor) * environment.ambientIntensity, 1.0f);
+        m_cameraData.ambientEquator =
+            glm::vec4(inx::color::SrgbToLinear(environment.ambientEquatorColor) * environment.ambientIntensity, 1.0f);
+        m_cameraData.ambientGround =
+            glm::vec4(inx::color::SrgbToLinear(environment.ambientGroundColor) * environment.ambientIntensity, 1.0f);
+        break;
+    case AmbientSource::Skybox:
+    default:
+        m_cameraData.ambientSky = glm::vec4(inx::color::SrgbToLinear(environment.skyTopColor) *
+                                                (environment.skyExposure * environment.ambientIntensity),
+                                            1.0f);
+        m_cameraData.ambientEquator = glm::vec4(inx::color::SrgbToLinear(environment.skyHorizonColor) *
+                                                    (environment.skyExposure * environment.ambientIntensity),
+                                                1.0f);
+        m_cameraData.ambientGround = glm::vec4(inx::color::SrgbToLinear(environment.skyGroundColor) *
+                                                   (environment.skyExposure * environment.ambientIntensity),
+                                               1.0f);
+        break;
+    }
+
     std::vector<WebVertex> vertices;
     WebPackedIndexStreams indexStreams;
     std::vector<WebDrawRange> drawRanges;
+    std::vector<WebDrawData> drawData;
     const glm::mat4 cameraToWorld = glm::inverse(camera->GetViewMatrix());
     const glm::vec3 cameraRight = glm::normalize(glm::vec3(cameraToWorld[0]));
     const glm::vec3 cameraUp = glm::normalize(glm::vec3(cameraToWorld[1]));
@@ -1550,8 +1663,13 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
         if (draw.material) {
             const RenderState &state = draw.material->GetRenderState();
             range.transparent = state.blendEnable || state.renderQueue >= 3000 || materialColor.a < 0.999f;
+            range.fullyCulled = state.cullMode == MaterialCullMode::FrontAndBack;
+            const uint8_t frontFace = state.frontFace == MaterialFrontFace::Clockwise ? 1u : 0u;
+            const uint8_t cullMode = static_cast<uint8_t>(state.cullMode);
+            range.rasterPipeline = static_cast<uint8_t>(frontFace * 3u + std::min<uint8_t>(cullMode, 2u));
         } else {
             range.transparent = materialColor.a < 0.999f;
+            range.rasterPipeline = 5;
         }
         try {
             range.indices = PackWebIndexRange(indexStreams, draw.meshIndexFormat, vertexBase, sourceVertices.size(),
@@ -1564,14 +1682,17 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
             return false;
         }
         const glm::mat3 worldNormal = glm::inverseTranspose(glm::mat3(draw.worldMatrix));
+        const bool lineDraw = std::any_of(sourceVertices.begin(), sourceVertices.end(), [](const Vertex &vertex) {
+            return vertex.boneIndices.w == kLineVertexMarker;
+        });
+        range.line = lineDraw;
 
         vertices.reserve(vertices.size() + sourceVertices.size());
         for (const Vertex &source : sourceVertices) {
             const bool lineVertex = source.boneIndices.w == kLineVertexMarker;
-            range.line = range.line || lineVertex;
-            glm::vec3 worldPosition;
-            glm::vec3 worldNormalValue;
-            glm::vec4 worldTangentValue(1.0f, 0.0f, 0.0f, normalScale);
+            glm::vec3 renderPosition;
+            glm::vec3 renderNormalValue;
+            glm::vec4 renderTangentValue(1.0f, 0.0f, 0.0f, normalScale);
             float vertexAlpha = 1.0f;
             if (lineVertex) {
                 const glm::vec3 center = glm::vec3(draw.worldMatrix * glm::vec4(source.pos, 1.0f));
@@ -1604,42 +1725,43 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
                 } else {
                     side = fallbackSide;
                 }
-                worldPosition = center + side * source.boneWeights.x;
-                worldNormalValue = source.boneIndices.y != 0u ? facing : worldNormal * source.normal;
-                worldTangentValue = glm::vec4(tangent, normalScale);
+                renderPosition = center + side * source.boneWeights.x;
+                renderNormalValue = source.boneIndices.y != 0u ? facing : worldNormal * source.normal;
+                renderTangentValue = glm::vec4(tangent, normalScale);
                 vertexAlpha = std::clamp(source.boneWeights.y, 0.0f, 1.0f);
             } else {
                 const glm::mat4 skin = SkinMatrix(source, draw.skinBoneMatrices);
                 const glm::vec3 localPosition = glm::vec3(skin * glm::vec4(source.pos, 1.0f));
-                worldPosition = glm::vec3(draw.worldMatrix * glm::vec4(localPosition, 1.0f));
+                renderPosition = localPosition;
                 const glm::vec3 localNormal = glm::mat3(skin) * source.normal;
-                worldNormalValue = worldNormal * localNormal;
-                const glm::mat3 tangentTransform = glm::mat3(draw.worldMatrix) * glm::mat3(skin);
+                renderNormalValue = localNormal;
+                const glm::mat3 tangentTransform = glm::mat3(skin);
                 glm::vec3 tangent = tangentTransform * glm::vec3(source.tangent);
-                const float transformSign = glm::determinant(tangentTransform) < 0.0f ? -1.0f : 1.0f;
+                const float skinSign = glm::determinant(tangentTransform) < 0.0f ? -1.0f : 1.0f;
+                const float worldSign = glm::determinant(glm::mat3(draw.worldMatrix)) < 0.0f ? -1.0f : 1.0f;
                 const float handedness = source.tangent.w < 0.0f ? -1.0f : 1.0f;
-                worldTangentValue = glm::vec4(tangent, handedness * transformSign * normalScale);
+                renderTangentValue = glm::vec4(tangent, handedness * skinSign * worldSign * normalScale);
             }
-            if (!Finite(worldNormalValue) || glm::dot(worldNormalValue, worldNormalValue) < 1.0e-8f)
-                worldNormalValue = glm::vec3(0.0f, 1.0f, 0.0f);
+            if (!Finite(renderNormalValue) || glm::dot(renderNormalValue, renderNormalValue) < 1.0e-8f)
+                renderNormalValue = glm::vec3(0.0f, 1.0f, 0.0f);
             else
-                worldNormalValue = glm::normalize(worldNormalValue);
-            glm::vec3 tangent = glm::vec3(worldTangentValue);
-            tangent -= worldNormalValue * glm::dot(worldNormalValue, tangent);
+                renderNormalValue = glm::normalize(renderNormalValue);
+            glm::vec3 tangent = glm::vec3(renderTangentValue);
+            tangent -= renderNormalValue * glm::dot(renderNormalValue, tangent);
             if (!Finite(tangent) || glm::dot(tangent, tangent) < 1.0e-8f) {
                 const glm::vec3 axis =
-                    std::abs(worldNormalValue.y) > 0.999f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
-                tangent = glm::normalize(glm::cross(axis, worldNormalValue));
+                    std::abs(renderNormalValue.y) > 0.999f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+                tangent = glm::normalize(glm::cross(axis, renderNormalValue));
             } else {
                 tangent = glm::normalize(tangent);
             }
-            worldTangentValue = glm::vec4(tangent, worldTangentValue.w);
+            renderTangentValue = glm::vec4(tangent, renderTangentValue.w);
             const glm::vec4 color = glm::vec4(source.color, vertexAlpha) * materialColor;
             range.transparent = range.transparent || color.a < 0.999f;
             WebVertex vertex{};
-            std::memcpy(vertex.position, &worldPosition, sizeof(vertex.position));
-            std::memcpy(vertex.normal, &worldNormalValue, sizeof(vertex.normal));
-            std::memcpy(vertex.tangent, &worldTangentValue, sizeof(vertex.tangent));
+            std::memcpy(vertex.position, &renderPosition, sizeof(vertex.position));
+            std::memcpy(vertex.normal, &renderNormalValue, sizeof(vertex.normal));
+            std::memcpy(vertex.tangent, &renderTangentValue, sizeof(vertex.tangent));
             std::memcpy(vertex.uv, &source.texCoord, sizeof(vertex.uv));
             std::memcpy(vertex.uv1, &source.texCoord1, sizeof(vertex.uv1));
             std::memcpy(vertex.color, &color, sizeof(vertex.color));
@@ -1659,55 +1781,38 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
         if (range.line)
             range.transparent = true;
 
-        if (range.indices.indexCount > 0)
+        if (range.indices.indexCount > 0) {
+            WebDrawData objectData;
+            if (!range.line) {
+                objectData.model = draw.worldMatrix;
+                objectData.normal = glm::mat4(glm::inverseTranspose(glm::mat3(draw.worldMatrix)));
+            }
+            range.drawIndex = static_cast<uint32_t>(drawData.size());
+            drawData.push_back(objectData);
             drawRanges.push_back(range);
+        }
     }
 
     size_t totalIndexCount = 0;
     for (const WebDrawRange &range : drawRanges)
         totalIndexCount += range.indices.indexCount;
     if (vertices.empty() || totalIndexCount == 0) {
-        ReportFrameIssue("empty-draw-stream");
-        return false;
-    }
-
-    const SceneEnvironmentSettings &environment = scene->GetEnvironment();
-    m_cameraData = {};
-    m_cameraData.viewProjection = ToWebClipSpace(frame->PrimaryView().viewProjection);
-    m_cameraData.inverseViewProjection = glm::inverse(m_cameraData.viewProjection);
-    m_cameraData.cameraPosition = glm::vec4(frame->PrimaryView().position, 1.0f);
-    m_cameraData.skyTopExposure = glm::vec4(inx::color::SrgbToLinear(environment.skyTopColor), environment.skyExposure);
-    m_cameraData.skyHorizon = glm::vec4(inx::color::SrgbToLinear(environment.skyHorizonColor), 1.0f);
-    m_cameraData.skyGround = glm::vec4(inx::color::SrgbToLinear(environment.skyGroundColor), 1.0f);
-    m_drawSky = m_diagnosticSkyEnabled && camera->GetClearFlags() == CameraClearFlags::Skybox;
-
-    using AmbientSource = SceneEnvironmentSettings::AmbientSource;
-    switch (static_cast<AmbientSource>(environment.ambientSource)) {
-    case AmbientSource::Color:
-        m_cameraData.ambient =
-            glm::vec4(inx::color::SrgbToLinear(environment.ambientColor), environment.ambientIntensity);
-        m_cameraData.ambientEquator.w = 0.0f;
-        break;
-    case AmbientSource::Gradient:
-        m_cameraData.ambientSky =
-            glm::vec4(inx::color::SrgbToLinear(environment.ambientSkyColor) * environment.ambientIntensity, 1.0f);
-        m_cameraData.ambientEquator =
-            glm::vec4(inx::color::SrgbToLinear(environment.ambientEquatorColor) * environment.ambientIntensity, 1.0f);
-        m_cameraData.ambientGround =
-            glm::vec4(inx::color::SrgbToLinear(environment.ambientGroundColor) * environment.ambientIntensity, 1.0f);
-        break;
-    case AmbientSource::Skybox:
-    default:
-        m_cameraData.ambientSky = glm::vec4(inx::color::SrgbToLinear(environment.skyTopColor) *
-                                                (environment.skyExposure * environment.ambientIntensity),
-                                            1.0f);
-        m_cameraData.ambientEquator = glm::vec4(inx::color::SrgbToLinear(environment.skyHorizonColor) *
-                                                    (environment.skyExposure * environment.ambientIntensity),
-                                                1.0f);
-        m_cameraData.ambientGround = glm::vec4(inx::color::SrgbToLinear(environment.skyGroundColor) *
-                                                   (environment.skyExposure * environment.ambientIntensity),
-                                               1.0f);
-        break;
+        if (visibleCount != 0) {
+            ReportFrameIssue("empty-draw-stream");
+            return false;
+        }
+        ReportFrameIssue("no-visible-renderers");
+        m_shadowEnabled = false;
+        m_vertices.clear();
+        m_indexStreams.uint16Indices.clear();
+        m_indexStreams.uint32Indices.clear();
+        m_drawRanges.clear();
+        m_drawData.clear();
+        m_residentSceneCount = sceneManager.GetSceneCount() + (sceneManager.GetRuntimePersistentScene() ? 1U : 0U);
+        m_residentRendererCount = sceneManager.GetActiveMeshRenderers().size();
+        m_residentLightCount = sceneManager.GetActiveLights().size();
+        m_activeWorldId = scene->GetWorldId();
+        return true;
     }
 
     Light *directionalLight = nullptr;
@@ -1722,8 +1827,8 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
         }
     }
     glm::vec3 rayDirection(-0.35f, -0.82f, -0.45f);
-    glm::vec3 lightColor(1.0f);
-    float lightIntensity = 1.0f;
+    glm::vec3 lightColor(0.0f);
+    float lightIntensity = 0.0f;
     float shadowStrength = 0.0f;
     if (directionalLight) {
         if (Transform *transform = directionalLight->GetTransform()) {
@@ -1741,17 +1846,18 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
     m_shadowEnabled = m_diagnosticShadowsEnabled && shadowStrength > 0.0f;
     m_cameraData.lightDirectionStrength = glm::vec4(towardLight, m_shadowEnabled ? shadowStrength : 0.0f);
 
-    uint32_t punctualLightCount = 0;
+    uint32_t additionalLightCount = 0;
     for (Light *light : residentLights) {
-        if (!light || !light->IsEnabled() || !light->GetAffectGeometry() || punctualLightCount >= kMaxPunctualLights)
+        if (!light || !light->IsEnabled() || !light->GetAffectGeometry() ||
+            additionalLightCount >= kMaxPunctualLights || light == directionalLight)
             continue;
         const LightType type = light->GetLightType();
-        if (type != LightType::Point && type != LightType::Spot)
+        if (type != LightType::Directional && type != LightType::Point && type != LightType::Spot)
             continue;
         Transform *transform = light->GetTransform();
         if (!transform)
             continue;
-        CameraData::PunctualLightData &target = m_cameraData.punctualLights[punctualLightCount++];
+        CameraData::PunctualLightData &target = m_cameraData.punctualLights[additionalLightCount++];
         target.positionRange = glm::vec4(transform->GetWorldPosition(), light->GetRange());
         target.colorIntensity = glm::vec4(light->GetLinearColor(), light->GetIntensity());
         glm::vec3 forward = transform->GetWorldForward();
@@ -1760,16 +1866,18 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
         target.directionOuterCos =
             glm::vec4(glm::normalize(forward), std::cos(glm::radians(light->GetOuterSpotAngle() * 0.5f)));
         target.parameters = glm::vec4(std::cos(glm::radians(light->GetSpotAngle() * 0.5f)),
-                                      type == LightType::Spot ? 1.0f : 0.0f, 0.0f, 0.0f);
+                                      type == LightType::Spot ? 1.0f : 0.0f,
+                                      type == LightType::Directional ? 1.0f : 0.0f, 0.0f);
     }
-    m_cameraData.lightCounts.x = punctualLightCount;
+    m_cameraData.lightCounts.x = additionalLightCount;
 
     glm::vec3 boundsMin(std::numeric_limits<float>::max());
     glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
-    for (const WebVertex &vertex : vertices) {
-        const glm::vec3 position(vertex.position[0], vertex.position[1], vertex.position[2]);
-        boundsMin = glm::min(boundsMin, position);
-        boundsMax = glm::max(boundsMax, position);
+    for (const DrawCall &draw : drawCalls) {
+        if (!draw.frustumVisible || !draw.meshVertices || !draw.meshIndices || draw.indexCount == 0)
+            continue;
+        boundsMin = glm::min(boundsMin, draw.worldBounds.min);
+        boundsMax = glm::max(boundsMax, draw.worldBounds.max);
     }
     const glm::vec3 center = (boundsMin + boundsMax) * 0.5f;
     const float radius = std::max(2.0f, glm::length(boundsMax - boundsMin) * 0.6f);
@@ -1785,6 +1893,7 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
     m_indexStreams.uint16Indices.swap(indexStreams.uint16Indices);
     m_indexStreams.uint32Indices.swap(indexStreams.uint32Indices);
     m_drawRanges.swap(drawRanges);
+    m_drawData.swap(drawData);
     m_residentSceneCount = sceneManager.GetSceneCount() + (sceneManager.GetRuntimePersistentScene() ? 1U : 0U);
     m_residentRendererCount = sceneManager.GetActiveMeshRenderers().size();
     m_residentLightCount = residentLights.size();
@@ -1802,27 +1911,44 @@ void WebSceneRenderer::ReportFrameIssue(const char *issue)
     if (m_lastFrameIssue == issue)
         return;
     m_lastFrameIssue = issue;
-    std::fprintf(stderr, "INFERNUX_WEB_SCENE_RENDER_EMPTY reason=%s\n", issue);
+    // A scene containing only UI is a valid Player scene. Keep that expected
+    // empty world render on the normal diagnostic stream; malformed scene
+    // state remains an actual browser error.
+    if (std::strcmp(issue, "no-visible-renderers") == 0)
+        std::printf("INFERNUX_WEB_SCENE_RENDER_EMPTY reason=%s\n", issue);
+    else
+        std::fprintf(stderr, "INFERNUX_WEB_SCENE_RENDER_EMPTY reason=%s\n", issue);
 }
 
 bool WebSceneRenderer::Prepare(wgpu::CommandEncoder encoder, uint32_t width, uint32_t height)
 {
     m_framePrepared = false;
-    if (!m_opaquePipeline || !m_transparentPipeline || !m_shadowPipeline || !encoder || !BuildFrame(width, height))
+    if (!m_opaquePipelines[5] || !m_transparentPipelines[5] || !m_shadowPipelines[5] || !encoder ||
+        !BuildFrame(width, height))
         return false;
     const uint64_t vertexBytes = m_vertices.size() * sizeof(WebVertex);
     const uint64_t indexBytes16 = m_indexStreams.uint16Indices.size() * sizeof(uint16_t);
     const uint64_t indexBytes32 = m_indexStreams.uint32Indices.size() * sizeof(uint32_t);
-    if (!EnsureBuffer(m_vertexBuffer, m_vertexCapacity, vertexBytes, wgpu::BufferUsage::Vertex) ||
+    const uint64_t drawDataBytes = m_drawData.size() * sizeof(WebDrawData);
+    const uint64_t previousDrawDataCapacity = m_drawDataCapacity;
+    if ((vertexBytes > 0 &&
+         !EnsureBuffer(m_vertexBuffer, m_vertexCapacity, vertexBytes, wgpu::BufferUsage::Vertex)) ||
         (indexBytes16 > 0 &&
          !EnsureBuffer(m_indexBuffer16, m_indexCapacity16, indexBytes16, wgpu::BufferUsage::Index)) ||
-        (indexBytes32 > 0 && !EnsureBuffer(m_indexBuffer32, m_indexCapacity32, indexBytes32, wgpu::BufferUsage::Index)))
+        (indexBytes32 > 0 && !EnsureBuffer(m_indexBuffer32, m_indexCapacity32, indexBytes32, wgpu::BufferUsage::Index)) ||
+        (drawDataBytes > 0 &&
+         !EnsureBuffer(m_drawDataBuffer, m_drawDataCapacity, drawDataBytes, wgpu::BufferUsage::Storage)))
         return false;
-    m_queue.WriteBuffer(m_vertexBuffer, 0, m_vertices.data(), vertexBytes);
+    if (m_drawDataCapacity != previousDrawDataCapacity && !CreateCameraBindGroups())
+        return false;
+    if (vertexBytes > 0)
+        m_queue.WriteBuffer(m_vertexBuffer, 0, m_vertices.data(), vertexBytes);
     if (indexBytes16 > 0)
         m_queue.WriteBuffer(m_indexBuffer16, 0, m_indexStreams.uint16Indices.data(), indexBytes16);
     if (indexBytes32 > 0)
         m_queue.WriteBuffer(m_indexBuffer32, 0, m_indexStreams.uint32Indices.data(), indexBytes32);
+    if (drawDataBytes > 0)
+        m_queue.WriteBuffer(m_drawDataBuffer, 0, m_drawData.data(), drawDataBytes);
     m_queue.WriteBuffer(m_cameraBuffer, 0, &m_cameraData, sizeof(m_cameraData));
 
     if (m_shadowEnabled) {
@@ -1836,17 +1962,17 @@ bool WebSceneRenderer::Prepare(wgpu::CommandEncoder encoder, uint32_t width, uin
         descriptor.colorAttachments = nullptr;
         descriptor.depthStencilAttachment = &depthAttachment;
         wgpu::RenderPassEncoder shadowPass = encoder.BeginRenderPass(&descriptor);
-        shadowPass.SetPipeline(m_shadowPipeline);
         shadowPass.SetBindGroup(0, m_shadowCameraGroup);
         shadowPass.SetVertexBuffer(0, m_vertexBuffer, 0, vertexBytes);
         for (const WebDrawRange &range : m_drawRanges) {
-            if (range.castsShadows) {
+            if (range.castsShadows && !range.fullyCulled) {
+                shadowPass.SetPipeline(m_shadowPipelines[range.rasterPipeline]);
                 if (!BindIndexStream(shadowPass, range.indices.format)) {
                     shadowPass.End();
                     return false;
                 }
                 shadowPass.DrawIndexed(range.indices.indexCount, 1, range.indices.firstIndex, range.indices.baseVertex,
-                                       0);
+                                       range.drawIndex);
             }
         }
         shadowPass.End();
@@ -1868,9 +1994,13 @@ bool WebSceneRenderer::RenderPrepared(wgpu::RenderPassEncoder pass)
         pass.Draw(3, 1, 0, 0);
     }
 
+    // A camera plus World/Screen UI is a complete renderable scene.  Keep
+    // the sky and UI pass alive even when the world has no mesh draw stream.
+    if (m_vertices.empty() || m_drawRanges.empty())
+        return true;
+
     pass.SetBindGroup(0, m_cameraGroup);
     pass.SetVertexBuffer(0, m_vertexBuffer, 0, vertexBytes);
-    pass.SetPipeline(m_opaquePipeline);
     size_t transparentCount = 0;
     size_t lineCount = 0;
     // Populate the complete opaque depth buffer first.  Interleaving opaque
@@ -1880,21 +2010,24 @@ bool WebSceneRenderer::RenderPrepared(wgpu::RenderPassEncoder pass)
     for (const WebDrawRange &range : m_drawRanges) {
         transparentCount += range.transparent ? 1u : 0u;
         lineCount += range.line ? 1u : 0u;
-        if (range.transparent)
+        if (range.transparent || range.fullyCulled)
             continue;
+        pass.SetPipeline(m_opaquePipelines[range.rasterPipeline]);
         pass.SetBindGroup(1, range.materialTextureGroup ? range.materialTextureGroup : m_defaultMaterialTextureGroup);
         if (!BindIndexStream(pass, range.indices.format))
             return false;
-        pass.DrawIndexed(range.indices.indexCount, 1, range.indices.firstIndex, range.indices.baseVertex, 0);
+        pass.DrawIndexed(range.indices.indexCount, 1, range.indices.firstIndex, range.indices.baseVertex,
+                         range.drawIndex);
     }
-    pass.SetPipeline(m_transparentPipeline);
     for (const WebDrawRange &range : m_drawRanges) {
-        if (!range.transparent)
+        if (!range.transparent || range.fullyCulled)
             continue;
+        pass.SetPipeline(m_transparentPipelines[range.rasterPipeline]);
         pass.SetBindGroup(1, range.materialTextureGroup ? range.materialTextureGroup : m_defaultMaterialTextureGroup);
         if (!BindIndexStream(pass, range.indices.format))
             return false;
-        pass.DrawIndexed(range.indices.indexCount, 1, range.indices.firstIndex, range.indices.baseVertex, 0);
+        pass.DrawIndexed(range.indices.indexCount, 1, range.indices.firstIndex, range.indices.baseVertex,
+                         range.drawIndex);
     }
     if (!m_reportedFirstFrame) {
         size_t indexCount16 = 0;

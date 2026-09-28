@@ -212,6 +212,7 @@ class WebScreenUIRenderer final
     bool m_reportedFirstDraw = false;
     bool m_fontAtlasDirty = false;
     bool m_reportedFirstWorldDraw = false;
+    bool m_reportedWorldCommandState = false;
 };
 
 } // namespace infernux::web

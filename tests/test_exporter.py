@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from Infernux.engine.game_builder import GameBuilder
+from Infernux.engine.build.compute_cpu import build_cpu_compute_source
 from infernux_web.exporter import (
     _reject_unshipped_web_dependencies,
     _validate_web_python_payload,
@@ -264,6 +265,7 @@ def test_web_cook_executes_public_cpu_jit_source_without_a_jit_runtime(
             "import Infernux.compute as gpu\n"
             "kernel_alias = gpu.kernel\n"
             "class Kernels:\n"
+            "    @staticmethod\n"
             "    @kernel_alias\n"
             "    def nested(domain):\n"
             "        pass\n",
@@ -335,7 +337,7 @@ def test_web_cook_executes_public_cpu_jit_source_without_a_jit_runtime(
         ),
     ],
 )
-def test_web_dependency_scan_rejects_gpu_declarations_without_kernel_compiler(
+def test_web_dependency_scan_accepts_gpu_declarations_for_cpu_cook(
     tmp_path: Path,
     source: str,
     name: str,
@@ -344,13 +346,12 @@ def test_web_dependency_scan_rejects_gpu_declarations_without_kernel_compiler(
     assets.mkdir(parents=True)
     (assets / "Compute.py").write_text(source, encoding="utf-8")
 
-    with pytest.raises(ValueError, match=rf"GPU compute declarations: {name}"):
-        _reject_unshipped_web_dependencies(
-            _python_sources(tmp_path), _player_manifest_with_numpy()
-        )
+    _reject_unshipped_web_dependencies(
+        _python_sources(tmp_path), _player_manifest_with_numpy()
+    )
 
 
-def test_web_gpu_diagnostic_preserves_class_identity_location_and_rewrite(tmp_path: Path) -> None:
+def test_web_static_kernel_is_accepted_for_cpu_cook(tmp_path: Path) -> None:
     assets = tmp_path / "Assets" / "Scripts"
     assets.mkdir(parents=True)
     source = assets / "Jelly.py"
@@ -364,16 +365,38 @@ def test_web_gpu_diagnostic_preserves_class_identity_location_and_rewrite(tmp_pa
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError) as error:
-        _reject_unshipped_web_dependencies(
-            _python_sources(tmp_path), _player_manifest_with_numpy()
-        )
-    message = str(error.value)
-    assert "Scripts.Jelly.Jelly.step" in message
-    assert f"{source}:5:5" in message
-    assert "target='Web/Cook'" in message
-    assert "Rewrite: remove @inx.compute.kernel/@inx.compute.function" in message
-    assert "no Python-to-WebGPU kernel compiler" in message
+    _reject_unshipped_web_dependencies(
+        _python_sources(tmp_path), _player_manifest_with_numpy()
+    )
+
+
+def test_web_compute_cook_vectorizes_work_items_and_atomics() -> None:
+    cooked = build_cpu_compute_source(
+        "import infernux as inx\n"
+        "@inx.compute.kernel\n"
+        "def gather(domain, output, target):\n"
+        "    i = inx.compute.index(domain)\n"
+        "    inx.compute.atomic_add(output[target[i]], domain[i])\n"
+    )
+
+    assert "@inx.compute._cpu_kernel" in cooked
+    assert "target[:]" in cooked
+    assert "inx.compute._cpu_atomic_add" in cooked
+
+
+def test_web_compute_cook_keeps_ordered_loop_kernel_sequential() -> None:
+    cooked = build_cpu_compute_source(
+        "import infernux as inx\n"
+        "@inx.compute.kernel\n"
+        "def ordered(domain, output):\n"
+        "    i = inx.compute.index(domain)\n"
+        "    for lane in range(3):\n"
+        "        inx.compute.atomic_add(output[i, lane], 1.0)\n"
+    )
+
+    assert "@inx.compute._cpu_kernel" in cooked
+    assert "for lane in range(3)" in cooked
+    assert "inx.compute._cpu_atomic_add(output[:, lane], i, 1.0, None)" in cooked
 
 
 def test_web_kernel_contract_fixture_reports_implicit_receiver_with_identity(tmp_path: Path) -> None:

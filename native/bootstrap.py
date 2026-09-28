@@ -10,6 +10,7 @@ import math
 import os
 import struct
 import sys
+import time
 from types import CodeType, ModuleType
 from typing import Any
 
@@ -35,6 +36,7 @@ _screen_height = 1
 _screen_ui_renderer: Any = None
 _screen_ui_texture_cache: Any = None
 _screen_ui_event_processor: Any = None
+_screen_ui_snapshot_diagnostic: tuple[Any, ...] | None = None
 _web_splash: Any = None
 _runtime_api_installed = False
 _player_root = "/infernux/player"
@@ -50,6 +52,7 @@ _RUNTIME_PACKAGE_FIELDS = frozenset(
 # Browser/WASM does not ship the native Numba/LLVM payload.  Set the explicit
 # compatibility profile before project modules are imported.
 os.environ.setdefault("INFERNUX_WEB_RUNTIME", "1")
+os.environ.setdefault("INFERNUX_WEB_CPU_COMPUTE", "1")
 if os.path.isdir(_player_python) and _player_python not in sys.path:
     sys.path.insert(0, _player_python)
 if os.path.isdir(_player_root):
@@ -178,11 +181,22 @@ def infernux_web_configure_physics() -> bool:
     physics_path = physics_settings.settings_path(_runtime_data_root)
     authored = os.path.isfile(physics_path)
     configuration = physics_settings.load(_runtime_data_root)
-    if not authored:
+    if authored:
+        configuration["max_fixed_delta_time"] = min(
+            float(configuration["max_fixed_delta_time"]),
+            float(configuration["fixed_delta_time"]) * 2.0,
+        )
+    else:
         # Desktop defaults reserve for very large simulations. A project that
         # needs those capacities can author PhysicsSettings explicitly; a Web
         # project with no file should not commit hundreds of MiB at startup.
+        # CPU-lowered Web compute uses one deterministic 30 Hz physics step per
+        # presented frame. This keeps simulation time real-time without the
+        # fixed-step catch-up spiral that otherwise repeats an expensive solver
+        # two or three times after a missed browser frame.
         configuration.update(
+            fixed_delta_time=1.0 / 30.0,
+            max_fixed_delta_time=1.0 / 30.0,
             temp_allocator_mb=32,
             max_jobs=1024,
             max_barriers=8,
@@ -353,6 +367,7 @@ def _install_platform_runtime_api(native_module: Any) -> None:
         "serialized_field": fields_module.serialized_field,
         "int_field": fields_module.int_field,
         "list_field": fields_module.list_field,
+        "FieldType": fields_module.FieldType,
         "GameObjectRef": ref_wrappers_module.GameObjectRef,
         "disallow_multiple": decorators_module.disallow_multiple,
         "add_component_menu": decorators_module.add_component_menu,
@@ -382,11 +397,13 @@ def _install_platform_runtime_api(native_module: Any) -> None:
     batch_module = importlib.import_module("Infernux.batch")
     instantiate_module = importlib.import_module("Infernux.instantiate")
     assets_module = importlib.import_module("Infernux.core.assets")
+    data_asset_module = importlib.import_module("Infernux.core.data_asset")
     sandbox_files_module = importlib.import_module("Infernux.core.sandbox_files")
 
     core_exports = {
         "AssetFile": assets_module.AssetFile,
         "AssetManager": assets_module.AssetManager,
+        "DataAsset": data_asset_module.DataAsset,
         "SandboxPath": sandbox_files_module.SandboxPath,
     }
     for name, value in core_exports.items():
@@ -430,6 +447,18 @@ def _install_platform_runtime_api(native_module: Any) -> None:
     for name, value in gameplay_exports.items():
         setattr(package, name, value)
     package.Debug = debug_module.Debug
+
+    def runtime_attribute(name: str) -> Any:
+        if name in {"jit", "compute"}:
+            return importlib.import_module(f"Infernux.{name}")
+        if name in {"buffer", "Buffer"}:
+            compute_module = importlib.import_module("Infernux.compute")
+            value = getattr(compute_module, name)
+            setattr(package, name, value)
+            return value
+        raise AttributeError(f"module 'Infernux' has no attribute {name!r}")
+
+    package.__getattr__ = runtime_attribute
     package.__all__ = tuple(
         sorted(
             {
@@ -496,9 +525,30 @@ def _install_runtime_lifecycle_bridge(scene_manager: Any, scheduler: Any) -> Non
         NativeRuntimeFrameBarrier.PENDING_DESTROY:
             RuntimeFrameBarrier.PENDING_DESTROY,
     }
-    scene_manager.set_runtime_frame_barrier_callback(
-        lambda barrier: scheduler.consume_native_barrier(barrier_map[barrier])
-    )
+    def consume_runtime_barrier(native_barrier: Any) -> None:
+        barrier = barrier_map[native_barrier]
+        changes = scheduler.consume_native_barrier(barrier)
+        if barrier == RuntimeFrameBarrier.TRANSFORM_TO_PHYSICS:
+            if changes is not None:
+                scheduler.execute_native_phase(
+                    "physics_pre_step", float(scene_manager.get_fixed_time_step())
+                )
+        elif barrier == RuntimeFrameBarrier.PHYSICS_TO_TRANSFORM:
+            if changes is not None:
+                scheduler.execute_native_phase(
+                    "physics_post_step", float(scene_manager.get_fixed_time_step())
+                )
+            from Infernux.compute import _poll_transform_bindings
+
+            _poll_transform_bindings()
+        elif barrier == RuntimeFrameBarrier.RENDER_EXTRACTION and (
+            not scene_manager.is_playing() or scene_manager.is_paused()
+        ):
+            from Infernux.compute import _poll_transform_bindings
+
+            _poll_transform_bindings()
+
+    scene_manager.set_runtime_frame_barrier_callback(consume_runtime_barrier)
     scheduler.sync_native_work_availability()
 
 
@@ -661,6 +711,22 @@ def _prepare_player_runtime() -> None:
     active_scene = scene_manager.get_active_scene()
     if active_scene is None:
         raise RuntimeError("Web Player scene transaction published no active scene")
+    # Web Player is source-less at runtime, but its cooked content still owns
+    # the exact Library/RuntimeTypeRegistry closure.  Run the same persistent
+    # project declaration warmup used by desktop and Android before the first
+    # visible frame so CPU JIT and GPU declaration caches are established on
+    # every target, including Web.
+    from Infernux.engine.startup_warmup import run_project_script_warmups
+
+    warmup_started = time.perf_counter()
+    warmup_hooks = run_project_script_warmups(
+        project_path=_runtime_data_root,
+        scope="player-startup",
+    )
+    print(
+        "INFERNUX_WEB_STARTUP_WARMUP_READY "
+        f"hooks={warmup_hooks} elapsed_ms={(time.perf_counter() - warmup_started) * 1000.0:.1f}"
+    )
     _player_session = session
     _player_scene_manager = scene_manager
     print(
@@ -1166,6 +1232,17 @@ def infernux_web_runtime_diagnostic(probe: int, argument: int) -> float:
         return float(counters.get("native_phase_dispatches", 0))
     if probe == 4:
         return float(counters.get("phase_errors", 0))
+    if probe == 11:
+        return float(len(scheduler.phase_plan("physics_pre_step")))
+    if probe == 12:
+        return float(counters.get("native_fixed_callbacks", 0))
+    if probe in (13, 14):
+        from Infernux.compute import statistics
+
+        compute = statistics()
+        if probe == 13:
+            return float(compute.cpu_submit_ms)
+        return float(compute.dispatch_count)
     return float("nan")
 
 
@@ -1314,6 +1391,31 @@ def _submit_screen_ui() -> None:
             collect_sorted_runtime_canvas_snapshot(scene, persistent_scene)
         )
     world_elements = _collect_world_ui_elements(scene, persistent_scene)
+    global _screen_ui_snapshot_diagnostic
+    snapshot_diagnostic = (
+        id(scene), int(getattr(scene, "world_id", 0)),
+        int(getattr(scene, "structure_version", 0)),
+        len(world_elements),
+        sum(
+            1 for element in world_elements
+            if element.enabled
+            and element.game_object is not None
+            and element.game_object.active_in_hierarchy
+        ),
+        len(canvases),
+    )
+    if snapshot_diagnostic != _screen_ui_snapshot_diagnostic:
+        print(
+            "INFERNUX_WEB_UI_SNAPSHOT "
+            f"world={len(world_elements)} eligible={snapshot_diagnostic[3]} "
+            f"canvases={len(canvases)} "
+            f"scene={getattr(scene, 'name', '')!r}"
+        )
+        _screen_ui_snapshot_diagnostic = snapshot_diagnostic
+    RuntimeScreenUISubmission.prepare_text_layouts(
+        world_elements, canvases, _screen_ui_renderer,
+        _screen_width, _screen_height,
+    )
     _screen_ui_texture_cache.poll()
     revision = runtime_ui_revision(
         scene,
@@ -1461,6 +1563,11 @@ def infernux_web_tick(delta_time: float) -> bool:
         return False
     _player_session.tick(max(0.0, min(float(delta_time), 0.25)))
     _process_screen_ui_events(delta_time)
+    # UI listeners may replace scenes. Dispatch after hit-test traversal and
+    # before collecting the next render submission, matching desktop ownership.
+    from Infernux.engine.runtime_event_queue import drain
+
+    drain()
     _submit_screen_ui()
     _frame_count += 1
     if _frame_count == 1:

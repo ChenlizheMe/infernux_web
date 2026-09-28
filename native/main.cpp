@@ -1003,13 +1003,6 @@ void Frame()
             passDescriptor.depthStencilAttachment = &depthAttachment;
         wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&passDescriptor);
         const bool renderedScene = scenePrepared && g_sceneRenderer.RenderPrepared(pass);
-        if (!g_splashActive && !renderedScene && g_rhi) {
-            infernux::web::WebGpuGraphicsCommandContext context;
-            auto commands = g_rhi->MakeGraphicsCommandEncoder(context, pass);
-            const auto &pipeline = g_fullscreenRenderer.EnsurePipeline(g_fullscreenPipelineKey);
-            infernux::FullscreenPushConstants pushConstants;
-            g_fullscreenRenderer.Draw(commands, pipeline, {}, {}, pushConstants, sizeof(pushConstants));
-        }
         if (scenePrepared && g_particleRuntimeReady && g_particleRenderingEnabledForDiagnostics &&
             !g_webGpuValidationFailed)
             (void)g_particleRuntime.Render(pass, g_width, g_height);
@@ -1049,7 +1042,15 @@ void Frame()
         wgpu::RenderPassEncoder presentPass = encoder.BeginRenderPass(&presentDescriptor);
         if (!g_splashActive && !g_webGpuValidationFailed)
             (void)g_postProcessRenderer.Render(presentPass);
-        if (!g_webGpuValidationFailed) {
+        // Keep the authored splash visible while it is active.  Once the
+        // splash has handed off to gameplay, do not expose the persistent
+        // screen UI until a complete scene frame has been prepared and
+        // presented.  Rendering the Hub UI over the clear target during that
+        // handoff made the Web Player start with a solid green background
+        // before the first sky frame was ready.
+        const bool renderScreenUi =
+            !g_webGpuValidationFailed && (g_splashActive || (scenePrepared && renderedScene));
+        if (renderScreenUi) {
             try {
                 (void)g_screenUIRenderer.Render(presentPass, 0, g_width, g_height);
                 (void)g_screenUIRenderer.Render(presentPass, 1, g_width, g_height);

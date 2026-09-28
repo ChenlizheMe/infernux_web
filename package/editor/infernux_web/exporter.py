@@ -520,8 +520,6 @@ def _reject_unshipped_web_dependencies(
 
     missing: set[str] = set()
     unsupported: set[str] = set()
-    gpu_declarations: dict[str, tuple[dict[str, object], ...]] = {}
-    web_cpu_fallback_modules: set[str] = set()
     for source_value in python_sources:
         source_path = Path(source_value).resolve()
         if not source_path.is_file() or source_path.suffix.casefold() != ".py":
@@ -534,12 +532,6 @@ def _reject_unshipped_web_dependencies(
             raise ValueError(f"Web dependency scan failed for {source_path}: {error}") from error
 
         declarations = _web_gpu_declaration_records(tree)
-        # A source module may explicitly provide a deterministic Web CPU
-        # implementation while retaining Desktop/Android GPU kernels.  The
-        # marker is deliberately source-local and must be paired with a
-        # runtime branch; arbitrary kernel declarations remain rejected.
-        if _has_web_cpu_fallback_marker(tree):
-            web_cpu_fallback_modules.add(str(source_path))
         if declarations:
             module_name = source_module_name(source_path)
             checked: list[dict[str, object]] = []
@@ -587,7 +579,14 @@ def _reject_unshipped_web_dependencies(
                     ))
                 record.pop("node", None)
                 checked.append(record)
-            gpu_declarations[str(source_path)] = tuple(checked)
+            from Infernux.engine.build.compute_cpu import build_cpu_compute_source
+
+            try:
+                build_cpu_compute_source(source_path.read_text(encoding="utf-8"))
+            except (SyntaxError, ValueError) as error:
+                raise ValueError(
+                    f"Web CPU compute lowering failed for {source_path}: {error}"
+                ) from error
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 names = (alias.name.split(".", 1)[0] for alias in node.names)
@@ -600,32 +599,6 @@ def _reject_unshipped_web_dependencies(
                     unsupported.add(name)
                 elif name == "numpy" and name not in provided_imports:
                     missing.add(name)
-    unsupported_gpu_declarations = {
-        path: records
-        for path, records in gpu_declarations.items()
-        if path not in web_cpu_fallback_modules
-    }
-    if unsupported_gpu_declarations:
-        names = sorted({str(item["name"]) for records in unsupported_gpu_declarations.values() for item in records})
-        sources = ", ".join(sorted(unsupported_gpu_declarations))
-        locations = ", ".join(
-            sorted(
-                f"{item['qualified']} at {path}:{item['line']}:{item['column']}"
-                for path, records in unsupported_gpu_declarations.items()
-                for item in records
-            )
-        )
-        raise ValueError(
-            "Web Player cannot execute source-authored GPU compute declarations: "
-            + ", ".join(names)
-            + f" (source: {sources}; declarations: {locations})"
-            + " [target='Web/Cook'; reason='no Python-to-WebGPU kernel compiler']"
-            + ". The Web target has no Python-to-WebGPU kernel compiler; "
-            "shipping these declarations as ordinary Python would change their semantics. "
-            "Rewrite: remove @inx.compute.kernel/@inx.compute.function from Web source, "
-            "move the declaration to a Desktop/Android compute script, or use a "
-            "Web-compatible CPU/WebGPU API."
-        )
     if unsupported or missing:
         unavailable = sorted(unsupported | missing)
         names = ", ".join(unavailable)
@@ -640,26 +613,6 @@ def _reject_unshipped_web_dependencies(
             "dependency payload is required; "
             "the build was stopped before publishing an unusable Player."
         )
-
-
-def _has_web_cpu_fallback_marker(tree: ast.Module) -> bool:
-    """Return whether a module opts into its own Web CPU implementation."""
-
-    marker = "__infernux_web_cpu_fallback__"
-    for node in tree.body:
-        targets = []
-        value = None
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-            value = node.value
-        elif isinstance(node, ast.AnnAssign):
-            targets = [node.target]
-            value = node.value
-        if not isinstance(value, ast.Constant) or value.value is not True:
-            continue
-        if any(isinstance(target, ast.Name) and target.id == marker for target in targets):
-            return True
-    return False
 
 
 def _web_gpu_declaration_records(tree: ast.Module) -> tuple[dict[str, object], ...]:

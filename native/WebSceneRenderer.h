@@ -79,10 +79,19 @@ class WebSceneRenderer final
     struct WebDrawRange
     {
         WebPackedIndexRange indices;
+        uint32_t drawIndex = 0;
         bool transparent = false;
         bool castsShadows = true;
         bool line = false;
+        bool fullyCulled = false;
+        uint8_t rasterPipeline = 5;
         wgpu::BindGroup materialTextureGroup;
+    };
+
+    struct alignas(16) WebDrawData
+    {
+        glm::mat4 model{1.0f};
+        glm::mat4 normal{1.0f};
     };
 
     struct GPUTexture
@@ -141,6 +150,7 @@ class WebSceneRenderer final
     bool CreatePipelines();
     bool CreateShadowResources();
     bool CreateMaterialTextureResources();
+    bool CreateCameraBindGroups();
     [[nodiscard]] GPUTexture ResolveMaterialTexture(const std::string &guid,
                                                      const MaterialTextureSampler &sampler,
                                                      const GPUTexture &fallback);
@@ -157,10 +167,13 @@ class WebSceneRenderer final
     wgpu::Device m_device;
     wgpu::Queue m_queue;
     wgpu::TextureFormat m_colorFormat = wgpu::TextureFormat::Undefined;
-    wgpu::RenderPipeline m_opaquePipeline;
-    wgpu::RenderPipeline m_transparentPipeline;
+    // One pipeline for each (front face, cull mode) pair. Material render
+    // state is part of the shared RHI contract and cannot be flattened to a
+    // Web-only double-sided pipeline without exposing back faces.
+    std::array<wgpu::RenderPipeline, 6> m_opaquePipelines;
+    std::array<wgpu::RenderPipeline, 6> m_transparentPipelines;
     wgpu::RenderPipeline m_skyPipeline;
-    wgpu::RenderPipeline m_shadowPipeline;
+    std::array<wgpu::RenderPipeline, 6> m_shadowPipelines;
     wgpu::BindGroupLayout m_cameraLayout;
     wgpu::BindGroup m_cameraGroup;
     wgpu::BindGroupLayout m_shadowCameraLayout;
@@ -174,6 +187,7 @@ class WebSceneRenderer final
     std::unordered_map<std::string, MaterialTextureSetState> m_materialTextureSets;
     uint64_t m_materialTextureGeneration = 1;
     wgpu::Buffer m_cameraBuffer;
+    wgpu::Buffer m_drawDataBuffer;
     wgpu::Buffer m_vertexBuffer;
     wgpu::Buffer m_indexBuffer16;
     wgpu::Buffer m_indexBuffer32;
@@ -181,6 +195,7 @@ class WebSceneRenderer final
     wgpu::TextureView m_shadowView;
     wgpu::Sampler m_shadowSampler;
     uint64_t m_vertexCapacity = 0;
+    uint64_t m_drawDataCapacity = 0;
     uint64_t m_indexCapacity16 = 0;
     uint64_t m_indexCapacity32 = 0;
     wgpu::Texture m_depthTexture;
@@ -194,6 +209,7 @@ class WebSceneRenderer final
     std::vector<WebVertex> m_vertices;
     WebPackedIndexStreams m_indexStreams;
     std::vector<WebDrawRange> m_drawRanges;
+    std::vector<WebDrawData> m_drawData;
     CameraData m_cameraData;
     std::string m_lastFrameIssue;
     size_t m_residentSceneCount = 0;

@@ -782,7 +782,11 @@ void WebScreenUIRenderer::BeginWorldElement(const std::array<float, 16> &localTo
     m_world->AddCallback(CommandBoundary, nullptr);
     m_pendingWorldElement = {};
     m_pendingWorldElement.vertexStart = m_world->VtxBuffer.Size;
-    m_pendingWorldElement.commandStart = m_world->CmdBuffer.Size;
+    // AddCallback always appends a fresh draw command after the callback.
+    // That trailing command is where the element's geometry is recorded.
+    // Starting at CmdBuffer.Size skipped it and made every populated world
+    // element appear to have zero drawable commands.
+    m_pendingWorldElement.commandStart = std::max(0, m_world->CmdBuffer.Size - 1);
     m_pendingWorldElement.localToWorld = glm::make_mat4(localToWorld.data());
     m_pendingWorldElement.pivotX = pivotX;
     m_pendingWorldElement.pivotY = pivotY;
@@ -846,6 +850,16 @@ void WebScreenUIRenderer::AddText(int list, float minX, float minY, float maxX, 
     const textlayout::TextLayoutResult layout =
         textlayout::LayoutText({text, fontPath, textlayout::ResolveFontSize(fontSize), wrapWidth, lineHeight,
                                 letterSpacing, fallbackFontPaths});
+    // With the legacy atlas upload path used by this renderer, a font added by
+    // LayoutText must be baked before we read glyph UVs into the draw list.
+    // Waiting until Render() rebuilds the atlas leaves the already-recorded
+    // vertices carrying UVs from the previous atlas layout, which produces
+    // scrambled text as soon as the engine PingFang face is loaded.
+    if (m_context && !ImGui::GetIO().Fonts->IsBuilt()) {
+        m_fontAtlasDirty = true;
+        if (!RefreshFontAtlas())
+            return;
+    }
     const int firstVertex = draw->VtxBuffer.Size;
     if (clip)
         draw->PushClipRect({minX, minY}, {maxX, maxY}, true);
@@ -855,7 +869,6 @@ void WebScreenUIRenderer::AddText(int list, float minX, float minY, float maxX, 
     draw->PopTextureID();
     if (clip)
         draw->PopClipRect();
-    m_fontAtlasDirty = true;
     TransformVertices(*draw, firstVertex, minX, minY, maxX, maxY, rotation, mirrorH, mirrorV);
 }
 
@@ -1076,8 +1089,16 @@ bool WebScreenUIRenderer::RenderWorld(wgpu::RenderPassEncoder pass, const glm::m
                                       uint32_t width, uint32_t height)
 {
     if (!pass || !m_world || m_worldElements.empty() || !m_worldDepthPipeline || !m_worldTopPipeline || width == 0 ||
-        height == 0 || m_worldElementOpen)
+        height == 0 || m_worldElementOpen) {
+        if (!m_reportedWorldCommandState && m_world && (m_world->VtxBuffer.Size > 0 || !m_worldElements.empty())) {
+            std::printf("INFERNUX_WEB_WORLD_UI_COMMAND_STATE spans=%zu vertices=%d indices=%d open=%d depth=%d top=%d size=%ux%u\n",
+                        m_worldElements.size(), m_world->VtxBuffer.Size, m_world->IdxBuffer.Size,
+                        m_worldElementOpen ? 1 : 0, m_worldDepthPipeline ? 1 : 0, m_worldTopPipeline ? 1 : 0,
+                        width, height);
+            m_reportedWorldCommandState = true;
+        }
         return false;
+    }
     if (!RefreshFontAtlas())
         return false;
 
@@ -1134,8 +1155,14 @@ bool WebScreenUIRenderer::RenderWorld(wgpu::RenderPassEncoder pass, const glm::m
                 draws.push_back({&command, binding, span.alwaysOnTop, -viewAnchor.z});
         }
     }
-    if (draws.empty())
+    if (draws.empty()) {
+        if (!m_reportedWorldCommandState) {
+            std::printf("INFERNUX_WEB_WORLD_UI_COMMAND_STATE spans=%zu vertices=%d indices=%d draws=0 mask=%u\n",
+                        m_worldElements.size(), m_world->VtxBuffer.Size, m_world->IdxBuffer.Size, cullingMask);
+            m_reportedWorldCommandState = true;
+        }
         return false;
+    }
     std::stable_sort(draws.begin(), draws.end(), [](const Draw &a, const Draw &b) {
         if (a.top != b.top)
             return !a.top;
