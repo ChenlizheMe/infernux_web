@@ -14,7 +14,7 @@ def test_player_doctor_explains_stale_manifest_without_python_runtime(tmp_path):
         json.dumps(
             {
                 "$schema": "infernux.web_player",
-                "engine": "0.4.0",
+                "engine": "0.4.1",
                 "platform": "web",
                 "architecture": "wasm32",
                 "python_abi": "cp313",
@@ -25,7 +25,7 @@ def test_player_doctor_explains_stale_manifest_without_python_runtime(tmp_path):
     )
 
     with pytest.raises(ValueError, match="stale/out-of-source") as error:
-        inspect_player_payload(player, engine="0.4.0")
+        inspect_player_payload(player, engine="0.4.1")
 
     message = str(error.value)
     assert "python_runtime" in message

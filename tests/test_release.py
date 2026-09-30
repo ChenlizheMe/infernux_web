@@ -55,7 +55,7 @@ class ReleaseTests(unittest.TestCase):
         player.mkdir()
         self.player = player
         (player / "Player.inxmanifest").write_text(json.dumps({
-            "$schema": "infernux.web_player", "engine": "0.4.0", "platform": "web",
+            "$schema": "infernux.web_player", "engine": "0.4.1", "platform": "web",
             "architecture": "wasm32", "python_abi": "cp313", "configuration": "Release",
             "python_runtime": _python_runtime_manifest(),
         }), encoding="utf-8")
@@ -78,7 +78,7 @@ class ReleaseTests(unittest.TestCase):
         (self.tools / "linux-x64/tint").unlink()
         with self.assertRaises(FileNotFoundError):
             release.build_release(
-                "v0.2.0",
+                "v0.2.1",
                 player_payload=self.player,
                 tools_payload=self.tools,
             )
@@ -88,7 +88,7 @@ class ReleaseTests(unittest.TestCase):
         (self.player / "infernux-runtime.wasm").write_bytes(b"not wasm")
         with self.assertRaisesRegex(ValueError, "WebAssembly"):
             release.build_release(
-                "v0.2.0",
+                "v0.2.1",
                 player_payload=self.player,
                 tools_payload=self.tools,
             )

@@ -1,3 +1,9 @@
+# 0.2.1 — Infernux 0.4.1
+
+- Publish the current exporter and precompiled Player payload for Infernux 0.4.1.
+- Include the 041 scene, asset, UI, compute, input and lifecycle fixes from the pinned engine sources.
+- Require Infernux 0.4.1 so old native payloads cannot be installed into the new engine.
+
 # Infernux Web Platform 0.2.0
 
 Official platform package for Infernux 0.4.0.
