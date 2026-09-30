@@ -73,6 +73,7 @@ jobs:
             --lock engine/scripts/setup/dawn_dependencies.lock.json \
             --output "$INFERNUX_DAWN_OFFICIAL_SNAPSHOT_DIR"
           engine/scripts/setup/build_web_toolchain.sh "$PWD/engine/out/toolchains/web"
+          mkdir -p engine/out/build
           bash engine/external/plugins/infernux_web/native/python_runtime/build_numpy_static_runtime.sh \
             --root "$PWD/engine/out/build/web-numpy-static-runtime" \
             --host-python "$CONDA_PREFIX/bin/python"
