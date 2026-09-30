@@ -36,6 +36,8 @@ _screen_height = 1
 _screen_ui_renderer: Any = None
 _screen_ui_texture_cache: Any = None
 _screen_ui_event_processor: Any = None
+_mouse_event_dispatcher: Any = None
+_input_scene_token: tuple[int, int] | None = None
 _screen_ui_snapshot_diagnostic: tuple[Any, ...] | None = None
 _web_splash: Any = None
 _runtime_api_installed = False
@@ -396,27 +398,78 @@ def _install_platform_runtime_api(native_module: Any) -> None:
     coroutine_module = importlib.import_module("Infernux.coroutine")
     batch_module = importlib.import_module("Infernux.batch")
     instantiate_module = importlib.import_module("Infernux.instantiate")
+    material_module = importlib.import_module("Infernux.core.material")
+    texture_module = importlib.import_module("Infernux.core.texture")
+    render_texture_module = importlib.import_module("Infernux.core.render_texture")
+    mesh_module = importlib.import_module("Infernux.core.mesh")
+    shader_module = importlib.import_module("Infernux.core.shader")
+    audio_clip_module = importlib.import_module("Infernux.core.audio_clip")
+    physic_material_module = importlib.import_module("Infernux.core.physic_material")
+    animation_clip_module = importlib.import_module("Infernux.core.animation_clip")
+    animation_clip3d_module = importlib.import_module("Infernux.core.animation_clip3d")
+    anim_state_machine_module = importlib.import_module(
+        "Infernux.core.anim_state_machine"
+    )
     assets_module = importlib.import_module("Infernux.core.assets")
     data_asset_module = importlib.import_module("Infernux.core.data_asset")
     sandbox_files_module = importlib.import_module("Infernux.core.sandbox_files")
+    asset_ref_module = importlib.import_module("Infernux.core.asset_ref")
 
     core_exports = {
+        "Material": material_module.Material,
+        "Texture": texture_module.Texture,
+        "RenderTexture": render_texture_module.RenderTexture,
+        "Mesh": mesh_module.Mesh,
+        "Shader": shader_module.Shader,
+        "AudioClip": audio_clip_module.AudioClip,
+        "PhysicMaterial": physic_material_module.PhysicMaterial,
+        "AnimationClip": animation_clip_module.AnimationClip,
+        "AnimationFrame": animation_clip_module.AnimationFrame,
+        "AnimationClip3D": animation_clip3d_module.AnimationClip3D,
+        "ImportedFloatCurve": animation_clip3d_module.ImportedFloatCurve,
+        "AnimStateMachine": anim_state_machine_module.AnimStateMachine,
+        "AnimState": anim_state_machine_module.AnimState,
+        "AnimTransition": anim_state_machine_module.AnimTransition,
+        "AnimCondition": anim_state_machine_module.AnimCondition,
+        "AnimParameter": anim_state_machine_module.AnimParameter,
         "AssetFile": assets_module.AssetFile,
         "AssetManager": assets_module.AssetManager,
         "DataAsset": data_asset_module.DataAsset,
         "SandboxPath": sandbox_files_module.SandboxPath,
+        "TextureRef": asset_ref_module.TextureRef,
+        "RenderTextureRef": asset_ref_module.RenderTextureRef,
+        "ShaderRef": asset_ref_module.ShaderRef,
+        "AudioClipRef": asset_ref_module.AudioClipRef,
+        "AnimationClipRef": asset_ref_module.AnimationClipRef,
+        "AnimationClip3DRef": asset_ref_module.AnimationClip3DRef,
+        "AnimStateMachineRef": asset_ref_module.AnimStateMachineRef,
+        "PhysicMaterialRef": asset_ref_module.PhysicMaterialRef,
+        "ParticleGraphRef": asset_ref_module.ParticleGraphRef,
+        "RenderEffectRef": asset_ref_module.RenderEffectRef,
+        "DataAssetRef": asset_ref_module.DataAssetRef,
     }
     for name, value in core_exports.items():
         setattr(core, name, value)
     core.__all__ = tuple(core_exports)
 
-    for source in (lib, math_module):
-        exports = getattr(source, "__all__", None)
-        if exports is None:
-            exports = tuple(name for name in vars(source) if not name.startswith("_"))
-        for name in exports:
-            if hasattr(source, name):
-                setattr(package, name, getattr(source, name))
+    native_gameplay_exports = (
+        "GameObject",
+        "Transform",
+        "Component",
+        "Space",
+        "PrimitiveType",
+        "LineAlignment",
+        "LineTextureMode",
+        "LineGradientMode",
+        "LineCurveWrapMode",
+        "LineColorKey",
+        "LineWidthKey",
+    )
+    for name in native_gameplay_exports:
+        if hasattr(lib, name):
+            setattr(package, name, getattr(lib, name))
+    for name in getattr(math_module, "__all__", ()):
+        setattr(package, name, getattr(math_module, name))
     for name in components.__all__:
         setattr(package, name, getattr(components, name))
     for name in screen_module.__all__:
@@ -467,23 +520,7 @@ def _install_platform_runtime_api(native_module: Any) -> None:
                 *getattr(math_module, "__all__", ()),
                 *components.__all__,
                 *gameplay_exports,
-                *(
-                    name
-                    for name in (
-                        "GameObject",
-                        "Transform",
-                        "Component",
-                        "Space",
-                        "PrimitiveType",
-                        "LineAlignment",
-                        "LineTextureMode",
-                        "LineGradientMode",
-                        "LineCurveWrapMode",
-                        "LineColorKey",
-                        "LineWidthKey",
-                    )
-                    if hasattr(lib, name)
-                ),
+                *(name for name in native_gameplay_exports if hasattr(lib, name)),
             }
         )
     )
@@ -968,7 +1005,7 @@ def infernux_web_ready(details: dict[str, Any]) -> None:
     """Receive the browser graphics and viewport contract from the native host."""
 
     global _screen_width, _screen_height, _screen_ui_renderer, _screen_ui_texture_cache
-    global _screen_ui_event_processor, _web_splash
+    global _screen_ui_event_processor, _mouse_event_dispatcher, _web_splash
 
     print(
         "INFERNUX_WEB_HOST_READY "
@@ -982,11 +1019,13 @@ def infernux_web_ready(details: dict[str, Any]) -> None:
     _screen_ui_renderer = _WebScreenUIRenderer()
     _screen_ui_texture_cache = _WebScreenUITextureCache()
     from Infernux.input import Input
+    from Infernux.engine.runtime_mouse_events import MouseEventDispatcher
     from Infernux.ui.ui_event_system import UIEventProcessor
 
     Input.set_game_focused(True)
     Input.set_game_viewport_origin(0.0, 0.0)
     _screen_ui_event_processor = UIEventProcessor()
+    _mouse_event_dispatcher = MouseEventDispatcher()
     _web_splash = _create_web_splash()
     if _web_splash is None:
         _activate_web_player_session()
@@ -1450,60 +1489,93 @@ def _submit_screen_ui() -> None:
 
 
 def _process_screen_ui_events(delta_time: float) -> None:
-    """Dispatch browser mouse and touch input through the Player UI event system."""
+    """Dispatch one browser pointer snapshot through Player UI and scene input."""
 
-    if _player_scene_manager is None or _screen_ui_event_processor is None:
+    global _input_scene_token
+    if (
+        _player_scene_manager is None
+        or _screen_ui_event_processor is None
+        or _mouse_event_dispatcher is None
+    ):
         return
 
     from Infernux.engine.runtime_screen_ui import (
         collect_runtime_ui_input_surfaces, map_runtime_ui_pointer,
+        map_runtime_ui_pointers,
     )
     from Infernux.input import Input, TouchPhase
     from Infernux.ui.ui_event_data import PointerType
     from Infernux.ui.ui_event_system import UIPointerFrame
 
     scene = _player_scene_manager.get_active_scene()
+    scene_token = (
+        int(scene.world_id), int(scene.temporal_discontinuity_revision)
+    ) if scene is not None else None
+    if scene_token != _input_scene_token:
+        _screen_ui_event_processor.discard()
+        _mouse_event_dispatcher.discard()
+        _input_scene_token = scene_token
+    if scene is None:
+        return
+
     persistent_scene = _player_scene_manager.get_runtime_persistent_scene()
     surfaces = collect_runtime_ui_input_surfaces(scene, persistent_scene)
+    camera = scene.effective_game_camera
+    mouse_frame = Input.get_game_mouse_frame_state(0)
+    mouse_x, mouse_y, scroll_x, scroll_y, held, down, up = mouse_frame
     if not surfaces:
         _screen_ui_event_processor.reset()
-        return
-    camera = scene.effective_game_camera if scene is not None else None
-    mouse_x, mouse_y, scroll_x, scroll_y, held, down, up = (
-        Input.get_game_mouse_frame_state(0)
-    )
-    def positions(screen_x: float, screen_y: float):
-        return map_runtime_ui_pointer(
-            surfaces, camera, screen_x, screen_y, _screen_width, _screen_height
+        _mouse_event_dispatcher.process(
+            camera,
+            (mouse_x, mouse_y),
+            (float(_screen_width), float(_screen_height)),
+            button_state=(held, down, up),
         )
+        return
+
+    mouse_positions, scene_hit = map_runtime_ui_pointer(
+        surfaces, camera, mouse_x, mouse_y, _screen_width, _screen_height,
+        include_scene_hit=True,
+    )
 
     pointers = [
         UIPointerFrame(
             pointer_id=-1,
             pointer_type=PointerType.Mouse,
-            canvas_positions=positions(float(mouse_x), float(mouse_y)),
+            canvas_positions=mouse_positions,
             down=bool(down),
             up=bool(up),
             held=bool(held),
             scroll_delta=(float(scroll_x), float(scroll_y)),
         )
     ]
-    for touch in Input.touches:
-        normalized_x, normalized_y = touch.normalized_position
-        release_positions = positions(
-            float(normalized_x) * _screen_width,
-            (1.0 - float(normalized_y)) * _screen_height,
+    touches = tuple(Input.touches)
+    touch_points = tuple(
+        (
+            float(touch.normalized_position[0]) * _screen_width,
+            (1.0 - float(touch.normalized_position[1])) * _screen_height,
         )
+        for touch in touches
+    )
+    touch_positions = map_runtime_ui_pointers(
+        surfaces, camera, touch_points, _screen_width, _screen_height
+    )
+    for touch, release_positions in zip(touches, touch_positions):
+        normalized_x, normalized_y = touch.normalized_position
         same_frame_terminal = touch.began_this_frame and touch.phase in (
             TouchPhase.ENDED, TouchPhase.CANCELED
         )
         press_positions = ()
         if same_frame_terminal:
             begin_x, begin_y = touch.begin_normalized_position
-            press_positions = positions(
-                float(begin_x) * _screen_width,
-                (1.0 - float(begin_y)) * _screen_height,
-            )
+            press_positions = map_runtime_ui_pointers(
+                surfaces,
+                camera,
+                ((float(begin_x) * _screen_width,
+                  (1.0 - float(begin_y)) * _screen_height),),
+                _screen_width,
+                _screen_height,
+            )[0]
         pointers.append(
             UIPointerFrame(
                 pointer_id=int(touch.finger_id),
@@ -1521,6 +1593,13 @@ def _process_screen_ui_events(delta_time: float) -> None:
 
     _screen_ui_event_processor.process_pointers(
         surfaces, pointers, max(0.0, min(float(delta_time), 0.25))
+    )
+    _mouse_event_dispatcher.process(
+        camera,
+        (mouse_x, mouse_y),
+        (float(_screen_width), float(_screen_height)),
+        hit=scene_hit,
+        button_state=(held, down, up),
     )
 
 

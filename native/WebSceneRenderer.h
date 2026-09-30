@@ -17,6 +17,7 @@
 namespace infernux
 {
 class InxMaterial;
+struct RendererParameterBlock;
 class TextureUploadStagingTicket;
 struct TextureCpuData;
 } // namespace infernux
@@ -154,7 +155,9 @@ class WebSceneRenderer final
     [[nodiscard]] GPUTexture ResolveMaterialTexture(const std::string &guid,
                                                      const MaterialTextureSampler &sampler,
                                                      const GPUTexture &fallback);
-    [[nodiscard]] wgpu::BindGroup ResolveMaterialTextureSet(const std::shared_ptr<InxMaterial> &material);
+    [[nodiscard]] wgpu::BindGroup ResolveMaterialTextureSet(
+        const std::shared_ptr<InxMaterial> &material,
+        const std::shared_ptr<const RendererParameterBlock> &parameters);
     [[nodiscard]] wgpu::BindGroup CreateMaterialTextureGroup(const std::array<GPUTexture, 6> &textures);
     [[nodiscard]] GPUTexture UploadMaterialTexture(const TextureCpuData &texture, const std::string &filterMode,
                                                    const std::string &wrapMode, int anisoLevel,

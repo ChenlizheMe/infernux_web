@@ -56,7 +56,7 @@ class WebScreenUIRenderer final
     [[nodiscard]] std::pair<float, float> MeasureText(const std::string &text, float fontSize, float wrapWidth,
                                                       const std::string &fontPath, float lineHeight,
                                                       float letterSpacing,
-                                                      const std::vector<std::string> &fallbackFontPaths = {}) const;
+                                                      const std::vector<std::string> &fallbackFontPaths = {});
     [[nodiscard]] uint64_t UploadTexture(const TextureCpuData &texture, uint64_t replaceTextureId = 0,
                                          const std::string &filterMode = "bilinear",
                                          const std::string &wrapMode = "clamp", int anisoLevel = 1);

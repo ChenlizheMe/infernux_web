@@ -64,3 +64,39 @@ def test_browser_ui_input_uses_shared_world_projection():
     assert "map_runtime_ui_pointer(" in event_section
     assert "scene.effective_game_camera" in event_section
     assert "_screen_ui_event_processor.process_pointers(" in event_section
+
+
+def test_text_preparation_publishes_font_atlas_before_ui_geometry():
+    renderer = (ROOT / "native/WebScreenUIRenderer.cpp").read_text(encoding="utf-8")
+    measure = renderer.split(
+        "std::pair<float, float> WebScreenUIRenderer::MeasureText", 1
+    )[1].split("uint64_t WebScreenUIRenderer::UploadTexture", 1)[0]
+
+    assert measure.index("textlayout::LayoutText") < measure.index("RefreshFontAtlas()")
+    assert "!ImGui::GetIO().Fonts->IsBuilt()" in measure
+    assert "Web UI font atlas publication failed during text preparation" in measure
+
+
+def test_text_preparation_remeasures_cached_layouts_before_ui_geometry():
+    runtime = (
+        ROOT.parents[2] / "python" / "Infernux" / "engine"
+        / "runtime_screen_ui.py"
+    ).read_text(encoding="utf-8")
+    preparation = runtime.split("def prepare_text_layouts", 1)[1].split(
+        "def _submit_world_element", 1
+    )[0]
+
+    assert 'getattr(element, "prepare_text_layout", None)' in preparation
+    assert preparation.count("prepare(renderer.measure_text") == 2
+
+
+def test_button_labels_join_text_atlas_preparation():
+    button = (
+        ROOT.parents[2] / "python" / "Infernux" / "ui" / "ui_button.py"
+    ).read_text(encoding="utf-8")
+
+    preparation = button.split("def prepare_text_layout", 1)[1].split(
+        "# ── Events", 1
+    )[0]
+    assert "ui_font_paths(self)" in preparation
+    assert "measure_text(*arguments" in preparation

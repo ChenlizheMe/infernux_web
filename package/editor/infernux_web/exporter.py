@@ -22,6 +22,9 @@ from Infernux.engine.build import (
     BuildRequest,
     BuildResult,
     BuildStep,
+    BuildOption,
+    BuildOptionChoice,
+    BuildOptionKind,
     BuildTarget,
     CapabilityReport,
     DiagnosticSeverity,
@@ -93,6 +96,38 @@ class WebPlatformExporter(PlatformExporter):
                 "web",
                 "wasm32",
                 _WEB_CAPABILITIES,
+            ),
+        )
+
+    def build_options(self, target):
+        if target.id != "web-wasm32":
+            raise ValueError(f"Unsupported Web build target: {target.id}")
+        return (
+            BuildOption(
+                "display_mode", "build.web_canvas_mode", BuildOptionKind.ENUM,
+                "fullscreen_borderless",
+                choices=(
+                    BuildOptionChoice("fullscreen_borderless", "build.web_fill_viewport"),
+                    BuildOptionChoice("windowed", "build.web_fixed_canvas"),
+                ),
+            ),
+            BuildOption(
+                "window_width", "build.web_canvas_width", BuildOptionKind.INTEGER,
+                1280, minimum=320, maximum=7680,
+                visible_when={"display_mode": "windowed"},
+            ),
+            BuildOption(
+                "window_height", "build.web_canvas_height", BuildOptionKind.INTEGER,
+                720, minimum=240, maximum=4320,
+                visible_when={"display_mode": "windowed"},
+            ),
+            BuildOption(
+                "window_resizable", "build.window_resizable",
+                BuildOptionKind.BOOLEAN, False, editor_visible=False,
+            ),
+            BuildOption(
+                "build_cache_root", "Build cache root", BuildOptionKind.PATH, "",
+                editor_visible=False,
             ),
         )
 

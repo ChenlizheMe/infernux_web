@@ -875,12 +875,23 @@ void WebScreenUIRenderer::AddText(int list, float minX, float minY, float maxX, 
 std::pair<float, float> WebScreenUIRenderer::MeasureText(const std::string &text, float fontSize, float wrapWidth,
                                                          const std::string &fontPath, float lineHeight,
                                                          float letterSpacing,
-                                                         const std::vector<std::string> &fallbackFontPaths) const
+                                                         const std::vector<std::string> &fallbackFontPaths)
 {
     ImGui::SetCurrentContext(m_context);
     const textlayout::TextLayoutResult layout =
         textlayout::LayoutText({text, fontPath, textlayout::ResolveFontSize(fontSize), wrapWidth, lineHeight,
                                 letterSpacing, fallbackFontPaths});
+    // RuntimeScreenUISubmission measures every text element before it records
+    // any geometry.  Honour that preparation boundary by publishing the final
+    // atlas immediately.  Otherwise a later AddText rebuild changes the
+    // atlas white-pixel UV after filled rectangles have already copied the old
+    // coordinate, making those rectangles permanently transparent in a cached
+    // first-frame command list.
+    if (m_context && !ImGui::GetIO().Fonts->IsBuilt()) {
+        m_fontAtlasDirty = true;
+        if (!RefreshFontAtlas())
+            throw std::runtime_error("Web UI font atlas publication failed during text preparation");
+    }
     return {layout.totalWidth, layout.totalHeight};
 }
 

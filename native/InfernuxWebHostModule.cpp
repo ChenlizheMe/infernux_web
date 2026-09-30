@@ -654,13 +654,18 @@ PyObject *ScreenUIMeasureText(PyObject *, PyObject *arguments)
     std::vector<std::string> fallbackFontPaths;
     if (!ParseFallbackFontPaths(fallbackFontPathsObject, fallbackFontPaths))
         return nullptr;
-    const auto measured =
-        g_screenUIRenderer
-            ? g_screenUIRenderer->MeasureText(text, static_cast<float>(fontSize), static_cast<float>(wrapWidth),
-                                              fontPath, static_cast<float>(lineHeight),
-                                              static_cast<float>(letterSpacing), fallbackFontPaths)
-            : std::pair<float, float>{0.0f, 0.0f};
-    return Py_BuildValue("ff", measured.first, measured.second);
+    try {
+        const auto measured =
+            g_screenUIRenderer
+                ? g_screenUIRenderer->MeasureText(text, static_cast<float>(fontSize), static_cast<float>(wrapWidth),
+                                                  fontPath, static_cast<float>(lineHeight),
+                                                  static_cast<float>(letterSpacing), fallbackFontPaths)
+                : std::pair<float, float>{0.0f, 0.0f};
+        return Py_BuildValue("ff", measured.first, measured.second);
+    } catch (const std::exception &error) {
+        PyErr_SetString(PyExc_RuntimeError, error.what());
+        return nullptr;
+    }
 }
 
 PyObject *ScreenUIResolveTexture(PyObject *, PyObject *arguments)

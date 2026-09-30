@@ -1,6 +1,7 @@
 #include "WebSceneRenderer.h"
 
 #include <core/types/ColorSpace.h>
+#include <function/renderer/RendererParameterBlock.h>
 #include <function/resources/AssetRegistry/AssetRegistry.h>
 #include <function/resources/InxMaterial/InxMaterial.h>
 #include <function/resources/InxTexture/InxTexture.h>
@@ -592,11 +593,23 @@ fn vertex_main(@location(0) position: vec3<f32>,
 }
 )wgsl";
 
-glm::vec4 MaterialColor(const std::shared_ptr<InxMaterial> &material)
+const MaterialProperty *ResolvedMaterialProperty(
+    const std::shared_ptr<InxMaterial> &material,
+    const std::shared_ptr<const RendererParameterBlock> &parameters,
+    const char *name)
 {
-    if (!material)
-        return glm::vec4(1.0f);
-    const MaterialProperty *property = material->GetProperty("baseColor");
+    if (parameters) {
+        const auto found = parameters->properties.find(name);
+        if (found != parameters->properties.end())
+            return &found->second;
+    }
+    return material ? material->GetProperty(name) : nullptr;
+}
+
+glm::vec4 MaterialColor(const std::shared_ptr<InxMaterial> &material,
+                        const std::shared_ptr<const RendererParameterBlock> &parameters)
+{
+    const MaterialProperty *property = ResolvedMaterialProperty(material, parameters, "baseColor");
     if (!property)
         return glm::vec4(1.0f);
     if (property->type == MaterialPropertyType::Color || property->type == MaterialPropertyType::Float4) {
@@ -610,11 +623,11 @@ glm::vec4 MaterialColor(const std::shared_ptr<InxMaterial> &material)
     return glm::vec4(1.0f);
 }
 
-float MaterialFloat(const std::shared_ptr<InxMaterial> &material, const char *name, float fallback)
+float MaterialFloat(const std::shared_ptr<InxMaterial> &material,
+                    const std::shared_ptr<const RendererParameterBlock> &parameters,
+                    const char *name, float fallback)
 {
-    if (!material)
-        return fallback;
-    const MaterialProperty *property = material->GetProperty(name);
+    const MaterialProperty *property = ResolvedMaterialProperty(material, parameters, name);
     if (!property || property->type != MaterialPropertyType::Float)
         return fallback;
     if (const auto *value = std::get_if<float>(&property->value))
@@ -622,11 +635,11 @@ float MaterialFloat(const std::shared_ptr<InxMaterial> &material, const char *na
     return fallback;
 }
 
-glm::vec4 MaterialVector(const std::shared_ptr<InxMaterial> &material, const char *name, const glm::vec4 &fallback)
+glm::vec4 MaterialVector(const std::shared_ptr<InxMaterial> &material,
+                         const std::shared_ptr<const RendererParameterBlock> &parameters,
+                         const char *name, const glm::vec4 &fallback)
 {
-    if (!material)
-        return fallback;
-    const MaterialProperty *property = material->GetProperty(name);
+    const MaterialProperty *property = ResolvedMaterialProperty(material, parameters, name);
     if (!property)
         return fallback;
     if (const auto *value = std::get_if<glm::vec4>(&property->value))
@@ -644,23 +657,24 @@ struct MaterialTextureBinding
 
 template <size_t Size>
 MaterialTextureBinding MaterialTexture(const std::shared_ptr<InxMaterial> &material,
+                                       const std::shared_ptr<const RendererParameterBlock> &parameters,
                                        const std::array<const char *, Size> &names, const char *fallback)
 {
-    if (!material)
-        return {fallback, {}};
     for (const char *name : names) {
-        const MaterialProperty *property = material->GetProperty(name);
+        const MaterialProperty *property = ResolvedMaterialProperty(material, parameters, name);
         if (!property || property->type != MaterialPropertyType::Texture2D)
             continue;
         if (const auto *guid = std::get_if<std::string>(&property->value); guid && !guid->empty()) {
-            const MaterialTextureSampler *sampler = material->GetTextureSampler(name);
+            const MaterialTextureSampler *sampler = material ? material->GetTextureSampler(name) : nullptr;
             return {*guid, sampler ? *sampler : MaterialTextureSampler{}};
         }
     }
     return {fallback, {}};
 }
 
-std::array<MaterialTextureBinding, 6> MaterialTextures(const std::shared_ptr<InxMaterial> &material)
+std::array<MaterialTextureBinding, 6> MaterialTextures(
+    const std::shared_ptr<InxMaterial> &material,
+    const std::shared_ptr<const RendererParameterBlock> &parameters)
 {
     constexpr std::array<const char *, 5> baseNames = {"baseColorTexture", "albedoMap", "albedoTexture", "mainTexture",
                                                        "texSampler"};
@@ -669,16 +683,19 @@ std::array<MaterialTextureBinding, 6> MaterialTextures(const std::shared_ptr<Inx
     constexpr std::array<const char *, 3> aoNames = {"aoMap", "occlusionMap", "ambientOcclusionMap"};
     constexpr std::array<const char *, 3> normalNames = {"normalMap", "normalTexture", "bumpMap"};
     constexpr std::array<const char *, 2> emissionNames = {"emissionMap", "emissiveMap"};
-    return {MaterialTexture(material, baseNames, "white"), MaterialTexture(material, metallicNames, "white"),
-            MaterialTexture(material, smoothnessNames, "white"), MaterialTexture(material, aoNames, "white"),
-            MaterialTexture(material, normalNames, "normal"), MaterialTexture(material, emissionNames, "white")};
+    return {MaterialTexture(material, parameters, baseNames, "white"),
+            MaterialTexture(material, parameters, metallicNames, "white"),
+            MaterialTexture(material, parameters, smoothnessNames, "white"),
+            MaterialTexture(material, parameters, aoNames, "white"),
+            MaterialTexture(material, parameters, normalNames, "normal"),
+            MaterialTexture(material, parameters, emissionNames, "white")};
 }
 
-int MaterialInt(const std::shared_ptr<InxMaterial> &material, const char *name, int fallback)
+int MaterialInt(const std::shared_ptr<InxMaterial> &material,
+                const std::shared_ptr<const RendererParameterBlock> &parameters,
+                const char *name, int fallback)
 {
-    if (!material)
-        return fallback;
-    const MaterialProperty *property = material->GetProperty(name);
+    const MaterialProperty *property = ResolvedMaterialProperty(material, parameters, name);
     if (!property || property->type != MaterialPropertyType::Int)
         return fallback;
     if (const auto *value = std::get_if<int>(&property->value))
@@ -1260,9 +1277,11 @@ WebSceneRenderer::GPUTexture WebSceneRenderer::ResolveMaterialTexture(const std:
     return state.gpu;
 }
 
-wgpu::BindGroup WebSceneRenderer::ResolveMaterialTextureSet(const std::shared_ptr<InxMaterial> &material)
+wgpu::BindGroup WebSceneRenderer::ResolveMaterialTextureSet(
+    const std::shared_ptr<InxMaterial> &material,
+    const std::shared_ptr<const RendererParameterBlock> &parameters)
 {
-    const std::array<MaterialTextureBinding, 6> bindings = MaterialTextures(material);
+    const std::array<MaterialTextureBinding, 6> bindings = MaterialTextures(material, parameters);
     std::array<GPUTexture, 6> textures{};
     std::string key;
     for (size_t index = 0; index < bindings.size(); ++index) {
@@ -1619,15 +1638,16 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
         }
         const size_t indexCount = draw.indexCount;
         const size_t vertexBase = vertices.size();
-        const glm::vec4 materialColor = inx::color::SrgbToLinear(MaterialColor(draw.material));
+        const glm::vec4 materialColor = inx::color::SrgbToLinear(MaterialColor(draw.material, draw.parameterBlock));
         const glm::vec4 emission =
-            inx::color::SrgbToLinear(MaterialVector(draw.material, "emissionColor", glm::vec4(0.0f)));
+            inx::color::SrgbToLinear(MaterialVector(draw.material, draw.parameterBlock, "emissionColor", glm::vec4(0.0f)));
         const glm::vec4 materialParameters(
-            std::clamp(MaterialFloat(draw.material, "metallic", 0.0f), 0.0f, 1.0f),
-            std::clamp(MaterialFloat(draw.material, "smoothness", 0.5f), 0.0f, 1.0f),
-            std::clamp(MaterialFloat(draw.material, "ambientOcclusion", 1.0f), 0.0f, 1.0f),
-            std::clamp(MaterialFloat(draw.material, "specularHighlights", 1.0f), 0.0f, 1.0f));
-        const float normalScale = std::max(0.0f, MaterialFloat(draw.material, "normalScale", 1.0f));
+            std::clamp(MaterialFloat(draw.material, draw.parameterBlock, "metallic", 0.0f), 0.0f, 1.0f),
+            std::clamp(MaterialFloat(draw.material, draw.parameterBlock, "smoothness", 0.5f), 0.0f, 1.0f),
+            std::clamp(MaterialFloat(draw.material, draw.parameterBlock, "ambientOcclusion", 1.0f), 0.0f, 1.0f),
+            std::clamp(MaterialFloat(draw.material, draw.parameterBlock, "specularHighlights", 1.0f), 0.0f, 1.0f));
+        const float normalScale =
+            std::max(0.0f, MaterialFloat(draw.material, draw.parameterBlock, "normalScale", 1.0f));
         float shadingModel = 0.0f;
         if (MaterialIsUnlit(draw.material))
             shadingModel = 1.0f;
@@ -1637,12 +1657,15 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
         if (draw.material && draw.material->GetRenderState().alphaClipEnabled)
             alphaClipThreshold = std::clamp(draw.material->GetRenderState().alphaClipThreshold, 0.0f, 1.0f);
         const glm::vec4 surfaceParameters(
-            shadingModel, std::clamp(MaterialFloat(draw.material, "diffuseThreshold", 0.45f), 0.0f, 1.0f),
-            std::clamp(MaterialFloat(draw.material, "bandSoftness", 0.04f), 0.0f, 0.25f), alphaClipThreshold);
+            shadingModel, std::clamp(MaterialFloat(draw.material, draw.parameterBlock, "diffuseThreshold", 0.45f), 0.0f, 1.0f),
+            std::clamp(MaterialFloat(draw.material, draw.parameterBlock, "bandSoftness", 0.04f), 0.0f, 0.25f), alphaClipThreshold);
         const std::array<int, 6> textureUvSets = {
-            MaterialInt(draw.material, "baseColorUvSet", 0), MaterialInt(draw.material, "metallicUvSet", 0),
-            MaterialInt(draw.material, "smoothnessUvSet", 0), MaterialInt(draw.material, "occlusionUvSet", 0),
-            MaterialInt(draw.material, "normalUvSet", 0), MaterialInt(draw.material, "emissionUvSet", 0),
+            MaterialInt(draw.material, draw.parameterBlock, "baseColorUvSet", 0),
+            MaterialInt(draw.material, draw.parameterBlock, "metallicUvSet", 0),
+            MaterialInt(draw.material, draw.parameterBlock, "smoothnessUvSet", 0),
+            MaterialInt(draw.material, draw.parameterBlock, "occlusionUvSet", 0),
+            MaterialInt(draw.material, draw.parameterBlock, "normalUvSet", 0),
+            MaterialInt(draw.material, draw.parameterBlock, "emissionUvSet", 0),
         };
         if (std::any_of(textureUvSets.begin(), textureUvSets.end(), [](int value) { return value < 0 || value > 1; })) {
             ReportFrameIssue("invalid-material-uv-set");
@@ -1651,15 +1674,15 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
         const glm::vec4 textureUvSets0(textureUvSets[0], textureUvSets[1], textureUvSets[2], textureUvSets[3]);
         const glm::vec2 textureUvSets1(textureUvSets[4], textureUvSets[5]);
         const glm::vec4 metallicChannels =
-            MaterialVector(draw.material, "metallicChannels", glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+            MaterialVector(draw.material, draw.parameterBlock, "metallicChannels", glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
         const glm::vec4 smoothnessChannels =
-            MaterialVector(draw.material, "smoothnessChannels", glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+            MaterialVector(draw.material, draw.parameterBlock, "smoothnessChannels", glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
         const glm::vec2 materialSampling(
-            std::clamp(MaterialFloat(draw.material, "smoothnessFromRoughness", 0.0f), 0.0f, 1.0f),
-            std::clamp(MaterialFloat(draw.material, "occlusionStrength", 1.0f), 0.0f, 1.0f));
+            std::clamp(MaterialFloat(draw.material, draw.parameterBlock, "smoothnessFromRoughness", 0.0f), 0.0f, 1.0f),
+            std::clamp(MaterialFloat(draw.material, draw.parameterBlock, "occlusionStrength", 1.0f), 0.0f, 1.0f));
         WebDrawRange range;
         range.castsShadows = draw.castsShadows;
-        range.materialTextureGroup = ResolveMaterialTextureSet(draw.material);
+        range.materialTextureGroup = ResolveMaterialTextureSet(draw.material, draw.parameterBlock);
         if (draw.material) {
             const RenderState &state = draw.material->GetRenderState();
             range.transparent = state.blendEnable || state.renderQueue >= 3000 || materialColor.a < 0.999f;

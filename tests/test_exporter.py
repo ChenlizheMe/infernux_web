@@ -396,7 +396,10 @@ def test_web_compute_cook_keeps_ordered_loop_kernel_sequential() -> None:
 
     assert "@inx.compute._cpu_kernel" in cooked
     assert "for lane in range(3)" in cooked
-    assert "inx.compute._cpu_atomic_add(output[:, lane], i, 1.0, None)" in cooked
+    assert (
+        "inx.compute._cpu_atomic_add(output[:, lane], i, 1.0, "
+        "__inx_np.ones_like(i, dtype=__inx_np.bool_))"
+    ) in cooked
 
 
 def test_web_kernel_contract_fixture_reports_implicit_receiver_with_identity(tmp_path: Path) -> None:
