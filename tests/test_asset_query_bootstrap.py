@@ -89,7 +89,7 @@ def test_web_bootstrap_binds_guid_asset_api_to_player_memfs() -> None:
     assert '"DrivenTransformProperties": transform_authoring_module.DrivenTransformProperties' in public_api
     assert '"drives_transform": transform_authoring_module.drives_transform' in public_api
     assert '"DrivesTransform": transform_authoring_module.DrivesTransform' in public_api
-    assert 'import_module("Infernux.version")' not in public_api
+    assert 'import_module("infernux.version")' not in public_api
     assert "package.__version__" not in public_api
     assert '"__version__"' not in public_api
     assert '_loose_root = os.path.join(_persistent_root, "loose")' in asset_contract

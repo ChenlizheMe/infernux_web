@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from Infernux.engine.build import (
+from infernux.engine.build import (
     BuildArtifact,
     BuildDiagnostic,
     BuildPlan,
@@ -31,7 +31,7 @@ from Infernux.engine.build import (
     PlatformCapabilities,
     PlatformExporter,
 )
-from Infernux._compiler.kernel_contract import (
+from infernux._compiler.kernel_contract import (
     implicit_receiver_attribute,
     implicit_receiver_name,
     kernel_diagnostic,
@@ -173,13 +173,13 @@ class WebPlatformExporter(PlatformExporter):
                 elapsed_seconds=time.perf_counter() - started,
             )
         details = dict(report.details)
-        import Infernux
+        import infernux
 
-        source_package = Path(Infernux.__file__).resolve().parent
+        source_package = Path(infernux.__file__).resolve().parent
         staging = _web_staging_directory(request)
         logs: tuple[str, ...] = ()
         try:
-            from Infernux.engine.platform_content_cook import (
+            from infernux.engine.platform_content_cook import (
                 build_settings_for_request,
             )
 
@@ -511,7 +511,7 @@ def _cook_web_player_assets(
     request: BuildRequest,
     staging: Path,
 ) -> tuple[str, Path, tuple[Path, ...]]:
-    from Infernux.engine.platform_content_cook import cook_platform_content
+    from infernux.engine.platform_content_cook import cook_platform_content
 
     cook_root = staging / ".infernux-player-cook"
     cook_root.mkdir(parents=True)
@@ -614,7 +614,7 @@ def _reject_unshipped_web_dependencies(
                     ))
                 record.pop("node", None)
                 checked.append(record)
-            from Infernux.engine.build.compute_cpu import build_cpu_compute_source
+            from infernux.engine.build.compute_cpu import build_cpu_compute_source
 
             try:
                 build_cpu_compute_source(source_path.read_text(encoding="utf-8"))
@@ -891,7 +891,7 @@ def _stage_web_branding(
 ) -> Path:
     """Create browser metadata from the shared cooked Player branding."""
 
-    from Infernux.engine.platform_content_cook import read_cooked_player_icon
+    from infernux.engine.platform_content_cook import read_cooked_player_icon
 
     data_roots = sorted(path for path in player_assets.glob("*_Data") if path.is_dir())
     if len(data_roots) != 1:
@@ -985,17 +985,13 @@ def _stage_engine_python_package(
     if not (source_package / "engine" / "platform_player_bootstrap.py").is_file():
         raise ValueError(f"Infernux Player Python sources are incomplete: {source_package}")
     site_packages = player_assets / "python" / "site-packages"
-    destination = site_packages / "Infernux"
+    destination = site_packages / "infernux"
     request.report("analyze", 0, 2, "Staging Infernux Web Player modules")
     shutil.copytree(
         source_package,
         destination,
         ignore=_web_engine_python_ignore,
     )
-    public_api = source_package.parent / "infernux.py"
-    if not public_api.is_file():
-        raise ValueError(f"Infernux public Python API is missing: {public_api}")
-    shutil.copy2(public_api, site_packages / public_api.name)
     packaging_spec = importlib.util.find_spec("packaging")
     packaging_source = (
         Path(str(packaging_spec.origin)).resolve().parent
@@ -1090,7 +1086,7 @@ def _stage_web_shader_sources(
 ) -> None:
     """Generate the shared renderer's GLSL inputs before WGSL translation."""
 
-    from Infernux.lib import _Infernux as native
+    from infernux.lib import _Infernux as native
 
     vertex_path = (
         source_package
@@ -1375,7 +1371,7 @@ def _assemble_web_host(
     project_web_template: Path | None,
 ) -> tuple[str, ...]:
     """Assemble project content around the plugin's immutable native payload."""
-    from Infernux.engine.player_package_native import write_pack
+    from infernux.engine.player_package_native import write_pack
     from .shader_pipeline import compile_shader_manifest
 
     # InxPack carries bytes, not POSIX modes. Restore execute permission only

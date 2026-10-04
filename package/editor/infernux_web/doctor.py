@@ -6,10 +6,10 @@ import platform
 import sys
 from pathlib import Path
 
-from Infernux.engine.build import (
+from infernux.engine.build import (
     BuildDiagnostic, BuildTargetId, CapabilityReport, DiagnosticSeverity,
 )
-from Infernux.version import ENGINE_VERSION
+from infernux.version import ENGINE_VERSION
 
 from .native_payload import inspect_player_payload, inspect_shader_tools
 

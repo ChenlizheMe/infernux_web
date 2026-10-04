@@ -6,8 +6,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from Infernux.engine.game_builder import GameBuilder
-from Infernux.engine.build.compute_cpu import build_cpu_compute_source
+from infernux.engine.game_builder import GameBuilder
+from infernux.engine.build.compute_cpu import build_cpu_compute_source
 from infernux_web.exporter import (
     _reject_unshipped_web_dependencies,
     _validate_web_python_payload,
@@ -77,10 +77,10 @@ def test_web_engine_python_staging_excludes_non_runtime_inputs(tmp_path: Path) -
 @pytest.mark.parametrize(
     "relative",
     [
-        "Infernux/tests/fixture.py",
-        "Infernux/resources/infernux.mcp.inxpkg",
-        "Infernux/resources/model.blend",
-        "Infernux/resources/model.obj",
+        "infernux/tests/fixture.py",
+        "infernux/resources/infernux.mcp.inxpkg",
+        "infernux/resources/model.blend",
+        "infernux/resources/model.obj",
         "packaging/native.pyd",
     ],
 )
@@ -121,7 +121,7 @@ def test_web_dependency_scan_allows_compute_runtime_without_gpu_declaration(
     assets = tmp_path / "Assets" / "Scripts"
     assets.mkdir(parents=True)
     (assets / "Buffers.py").write_text(
-        "from Infernux import compute\n\n"
+        "from infernux import compute\n\n"
         "def upload(values):\n"
         "    return compute.buffer(values)\n",
         encoding="utf-8",
@@ -161,13 +161,13 @@ def test_web_dependency_scan_still_rejects_numba_when_numpy_is_present(tmp_path:
             "    return value\n"
         ),
         (
-            "from Infernux import jit as runtime_jit\n"
+            "from infernux import jit as runtime_jit\n"
             "@runtime_jit.compile(cache=True)\n"
             "def simulate(value):\n"
             "    return value\n"
         ),
         (
-            "from Infernux.jit import compile as optimize\n"
+            "from infernux.jit import compile as optimize\n"
             "@optimize(parallel_policy='required')\n"
             "def helper(value):\n"
             "    return value\n"
@@ -230,14 +230,14 @@ def test_web_cook_executes_public_cpu_jit_source_without_a_jit_runtime(
             "update",
         ),
         (
-            "from Infernux.compute import function as gpu_function\n"
+            "from infernux.compute import function as gpu_function\n"
             "@gpu_function\n"
             "def helper(value):\n"
             "    return value\n",
             "helper",
         ),
         (
-            "from Infernux import compute as gpu\n"
+            "from infernux import compute as gpu\n"
             "@gpu.kernel\n"
             "def integrate(domain):\n"
             "    pass\n",
@@ -253,7 +253,7 @@ def test_web_cook_executes_public_cpu_jit_source_without_a_jit_runtime(
             "assigned_alias",
         ),
         (
-            "from Infernux import compute\n"
+            "from infernux import compute\n"
             "api = compute\n"
             "helper_decorator: object = api.function\n"
             "@helper_decorator()\n"
@@ -262,7 +262,7 @@ def test_web_cook_executes_public_cpu_jit_source_without_a_jit_runtime(
             "assigned_helper",
         ),
         (
-            "import Infernux.compute as gpu\n"
+            "import infernux.compute as gpu\n"
             "kernel_alias = gpu.kernel\n"
             "class Kernels:\n"
             "    @staticmethod\n"
@@ -272,7 +272,7 @@ def test_web_cook_executes_public_cpu_jit_source_without_a_jit_runtime(
             "nested",
         ),
         (
-            "from Infernux.compute import *\n"
+            "from infernux.compute import *\n"
             "@kernel\n"
             "def star_imported(domain):\n"
             "    pass\n",
@@ -356,7 +356,7 @@ def test_web_static_kernel_is_accepted_for_cpu_cook(tmp_path: Path) -> None:
     assets.mkdir(parents=True)
     source = assets / "Jelly.py"
     source.write_text(
-        "import Infernux as inx\n"
+        "import infernux as inx\n"
         "class Jelly:\n"
         "    @staticmethod\n"
         "    @inx.compute.kernel\n"
@@ -461,7 +461,7 @@ def test_web_dependency_scan_uses_only_frozen_player_sources(tmp_path: Path) -> 
     editor.parent.mkdir(parents=True)
     editor.write_text(
         "import numba\n"
-        "from Infernux.compute import kernel\n"
+        "from infernux.compute import kernel\n"
         "@kernel\n"
         "def bake(domain):\n"
         "    pass\n",

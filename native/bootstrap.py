@@ -178,7 +178,7 @@ def infernux_web_configure_physics() -> bool:
     import _Infernux as native_module
 
     _install_platform_runtime_api(native_module)
-    from Infernux.physics import settings as physics_settings
+    from infernux.physics import settings as physics_settings
 
     physics_path = physics_settings.settings_path(_runtime_data_root)
     authored = os.path.isfile(physics_path)
@@ -210,7 +210,7 @@ def infernux_web_configure_physics() -> bool:
     # still publish jobs, but the shared scheduler consumes them serially.
     configuration["max_concurrency"] = 1
     from _InfernuxWebHost import configure_physics
-    from Infernux.timing import Time
+    from infernux.timing import Time
 
     configure_physics(json.dumps(configuration, separators=(",", ":")))
     Time._fixed_delta_time = configuration["fixed_delta_time"]
@@ -303,38 +303,38 @@ def _install_platform_runtime_api(native_module: Any) -> None:
     if _runtime_api_installed:
         return
 
-    package_root = os.path.join(_player_python, "Infernux")
-    package = _package_namespace("Infernux", package_root)
-    _package_namespace("Infernux.engine", os.path.join(package_root, "engine"))
-    core = _package_namespace("Infernux.core", os.path.join(package_root, "core"))
+    package_root = os.path.join(_player_python, "infernux")
+    package = _package_namespace("infernux", package_root)
+    _package_namespace("infernux.engine", os.path.join(package_root, "engine"))
+    core = _package_namespace("infernux.core", os.path.join(package_root, "core"))
     components = _package_namespace(
-        "Infernux.components", os.path.join(package_root, "components")
+        "infernux.components", os.path.join(package_root, "components")
     )
     builtin = _package_namespace(
-        "Infernux.components.builtin",
+        "infernux.components.builtin",
         os.path.join(package_root, "components", "builtin"),
     )
-    sys.modules["Infernux.lib._Infernux"] = native_module
+    sys.modules["infernux.lib._Infernux"] = native_module
 
     import importlib
 
-    lib = importlib.import_module("Infernux.lib")
-    math_module = importlib.import_module("Infernux.math")
-    debug_module = importlib.import_module("Infernux.debug")
-    component_module = importlib.import_module("Infernux.components.component")
-    decorators_module = importlib.import_module("Infernux.components.decorators")
-    fields_module = importlib.import_module("Infernux.components.fields")
-    ref_wrappers_module = importlib.import_module("Infernux.components.ref_wrappers")
+    lib = importlib.import_module("infernux.lib")
+    math_module = importlib.import_module("infernux.math")
+    debug_module = importlib.import_module("infernux.debug")
+    component_module = importlib.import_module("infernux.components.component")
+    decorators_module = importlib.import_module("infernux.components.decorators")
+    fields_module = importlib.import_module("infernux.components.fields")
+    ref_wrappers_module = importlib.import_module("infernux.components.ref_wrappers")
     transform_authoring_module = importlib.import_module(
-        "Infernux.components.transform_authoring"
+        "infernux.components.transform_authoring"
     )
     serializable_module = importlib.import_module(
-        "Infernux.components.serializable_object"
+        "infernux.components.serializable_object"
     )
     lifecycle_module = importlib.import_module(
-        "Infernux.components._component_lifecycle"
+        "infernux.components._component_lifecycle"
     )
-    particle_module = importlib.import_module("Infernux.components.particle_system")
+    particle_module = importlib.import_module("infernux.components.particle_system")
     builtin_modules = {
         "AudioListener": "audio_listener",
         "AudioSource": "audio_source",
@@ -356,7 +356,7 @@ def _install_platform_runtime_api(native_module: Any) -> None:
     }
     for export_name, module_name in builtin_modules.items():
         source = importlib.import_module(
-            f"Infernux.components.builtin.{module_name}"
+            f"infernux.components.builtin.{module_name}"
         )
         value = getattr(source, export_name)
         setattr(builtin, export_name, value)
@@ -385,35 +385,35 @@ def _install_platform_runtime_api(native_module: Any) -> None:
         setattr(components, name, value)
     components.__all__ = tuple(component_exports) + tuple(builtin_modules)
 
-    runtime_services = importlib.import_module("Infernux.runtime_services")
+    runtime_services = importlib.import_module("infernux.runtime_services")
     web_host = importlib.import_module("_InfernuxWebHost")
     runtime_services.install_runtime_service("gpu-particles", web_host)
     runtime_services.install_runtime_service("text-input", web_host)
-    screen_module = importlib.import_module("Infernux.screen")
-    timing_module = importlib.import_module("Infernux.timing")
-    mathf_module = importlib.import_module("Infernux.mathf")
-    scene_module = importlib.import_module("Infernux.scene")
-    application_module = importlib.import_module("Infernux.application")
-    lifecycle_public_module = importlib.import_module("Infernux.lifecycle")
-    coroutine_module = importlib.import_module("Infernux.coroutine")
-    batch_module = importlib.import_module("Infernux.batch")
-    instantiate_module = importlib.import_module("Infernux.instantiate")
-    material_module = importlib.import_module("Infernux.core.material")
-    texture_module = importlib.import_module("Infernux.core.texture")
-    render_texture_module = importlib.import_module("Infernux.core.render_texture")
-    mesh_module = importlib.import_module("Infernux.core.mesh")
-    shader_module = importlib.import_module("Infernux.core.shader")
-    audio_clip_module = importlib.import_module("Infernux.core.audio_clip")
-    physic_material_module = importlib.import_module("Infernux.core.physic_material")
-    animation_clip_module = importlib.import_module("Infernux.core.animation_clip")
-    animation_clip3d_module = importlib.import_module("Infernux.core.animation_clip3d")
+    screen_module = importlib.import_module("infernux.screen")
+    timing_module = importlib.import_module("infernux.timing")
+    mathf_module = importlib.import_module("infernux.mathf")
+    scene_module = importlib.import_module("infernux.scene")
+    application_module = importlib.import_module("infernux.application")
+    lifecycle_public_module = importlib.import_module("infernux.lifecycle")
+    coroutine_module = importlib.import_module("infernux.coroutine")
+    batch_module = importlib.import_module("infernux.batch")
+    instantiate_module = importlib.import_module("infernux.instantiate")
+    material_module = importlib.import_module("infernux.core.material")
+    texture_module = importlib.import_module("infernux.core.texture")
+    render_texture_module = importlib.import_module("infernux.core.render_texture")
+    mesh_module = importlib.import_module("infernux.core.mesh")
+    shader_module = importlib.import_module("infernux.core.shader")
+    audio_clip_module = importlib.import_module("infernux.core.audio_clip")
+    physic_material_module = importlib.import_module("infernux.core.physic_material")
+    animation_clip_module = importlib.import_module("infernux.core.animation_clip")
+    animation_clip3d_module = importlib.import_module("infernux.core.animation_clip3d")
     anim_state_machine_module = importlib.import_module(
-        "Infernux.core.anim_state_machine"
+        "infernux.core.anim_state_machine"
     )
-    assets_module = importlib.import_module("Infernux.core.assets")
-    data_asset_module = importlib.import_module("Infernux.core.data_asset")
-    sandbox_files_module = importlib.import_module("Infernux.core.sandbox_files")
-    asset_ref_module = importlib.import_module("Infernux.core.asset_ref")
+    assets_module = importlib.import_module("infernux.core.assets")
+    data_asset_module = importlib.import_module("infernux.core.data_asset")
+    sandbox_files_module = importlib.import_module("infernux.core.sandbox_files")
+    asset_ref_module = importlib.import_module("infernux.core.asset_ref")
 
     core_exports = {
         "Material": material_module.Material,
@@ -505,7 +505,7 @@ def _install_platform_runtime_api(native_module: Any) -> None:
         if name in {"jit", "compute"}:
             return importlib.import_module(f"Infernux.{name}")
         if name in {"buffer", "Buffer"}:
-            compute_module = importlib.import_module("Infernux.compute")
+            compute_module = importlib.import_module("infernux.compute")
             value = getattr(compute_module, name)
             setattr(package, name, value)
             return value
@@ -528,8 +528,8 @@ def _install_platform_runtime_api(native_module: Any) -> None:
 
 
 def _install_runtime_lifecycle_bridge(scene_manager: Any, scheduler: Any) -> None:
-    from Infernux.engine.runtime_change_journal import RuntimeFrameBarrier
-    from Infernux.lib import NativeRuntimeFrameBarrier
+    from infernux.engine.runtime_change_journal import RuntimeFrameBarrier
+    from infernux.lib import NativeRuntimeFrameBarrier
 
     scheduler.bind_native_bridge(scene_manager)
     scene_manager.set_runtime_lifecycle_callbacks(
@@ -575,13 +575,13 @@ def _install_runtime_lifecycle_bridge(scene_manager: Any, scheduler: Any) -> Non
                 scheduler.execute_native_phase(
                     "physics_post_step", float(scene_manager.get_fixed_time_step())
                 )
-            from Infernux.compute import _poll_transform_bindings
+            from infernux.compute import _poll_transform_bindings
 
             _poll_transform_bindings()
         elif barrier == RuntimeFrameBarrier.RENDER_EXTRACTION and (
             not scene_manager.is_playing() or scene_manager.is_paused()
         ):
-            from Infernux.compute import _poll_transform_bindings
+            from infernux.compute import _poll_transform_bindings
 
             _poll_transform_bindings()
 
@@ -617,13 +617,13 @@ def _prepare_player_asset_contract() -> None:
 
     _install_platform_runtime_api(native_module)
     from _InfernuxWebHost import initialize_runtime_assets
-    from Infernux.engine.player_service_graph import (
+    from infernux.engine.player_service_graph import (
         PlayerRuntimeAssetCatalog,
         RuntimeProductManifest,
     )
-    from Infernux.engine.project_context import set_project_root
-    from Infernux.engine.runtime_type_registry import install_runtime_type_registry
-    from Infernux.lib import AssetRegistry
+    from infernux.engine.project_context import set_project_root
+    from infernux.engine.runtime_type_registry import install_runtime_type_registry
+    from infernux.lib import AssetRegistry
 
     set_project_root(_runtime_data_root)
     manifest_document = _read_json(
@@ -681,7 +681,7 @@ def _prepare_player_asset_contract() -> None:
         records_document,
     )
     print("INFERNUX_WEB_RUNTIME_CONTRACT_READY")
-    import Infernux.components as runtime_components
+    import infernux.components as runtime_components
 
     if not hasattr(runtime_components, "ParticleSystem"):
         raise RuntimeError("Web Player component surface omitted ParticleSystem")
@@ -711,13 +711,13 @@ def _prepare_player_runtime() -> None:
     if _player_session is not None:
         return
     _prepare_player_asset_contract()
-    from Infernux.engine.player_runtime import PlayerRuntimeSession
-    from Infernux.lib import SceneManager
-    from Infernux.plugins import PluginManager
+    from infernux.engine.player_runtime import PlayerRuntimeSession
+    from infernux.lib import SceneManager
+    from infernux.plugins import PluginManager
 
     session = PlayerRuntimeSession(asset_database=_player_asset_database)
-    from Infernux.application import Application
-    from Infernux.core.assets import AssetManager
+    from infernux.application import Application
+    from infernux.core.assets import AssetManager
 
     # Bind the platform session before project code or the initial scene can
     # query assets. AssetManager receives only the runtime database installed
@@ -753,7 +753,7 @@ def _prepare_player_runtime() -> None:
     # project declaration warmup used by desktop and Android before the first
     # visible frame so CPU JIT and GPU declaration caches are established on
     # every target, including Web.
-    from Infernux.engine.startup_warmup import run_project_script_warmups
+    from infernux.engine.startup_warmup import run_project_script_warmups
 
     warmup_started = time.perf_counter()
     warmup_hooks = run_project_script_warmups(
@@ -1018,9 +1018,9 @@ def infernux_web_ready(details: dict[str, Any]) -> None:
     _screen_height = max(1, int(details.get("height", 1)))
     _screen_ui_renderer = _WebScreenUIRenderer()
     _screen_ui_texture_cache = _WebScreenUITextureCache()
-    from Infernux.input import Input
-    from Infernux.engine.runtime_mouse_events import MouseEventDispatcher
-    from Infernux.ui.ui_event_system import UIEventProcessor
+    from infernux.input import Input
+    from infernux.engine.runtime_mouse_events import MouseEventDispatcher
+    from infernux.ui.ui_event_system import UIEventProcessor
 
     Input.set_game_focused(True)
     Input.set_game_viewport_origin(0.0, 0.0)
@@ -1185,7 +1185,7 @@ def _iter_web_render_effects(
 def _web_render_effect_path(guid: str, path_hint: str) -> str:
     """Resolve a packaged render-effect reference through its GUID."""
 
-    from Infernux.lib import AssetRegistry
+    from infernux.lib import AssetRegistry
 
     if not guid:
         raise RuntimeError(
@@ -1235,7 +1235,7 @@ def infernux_web_input(kind: str, payload: dict[str, Any]) -> None:
 def infernux_web_runtime_diagnostic(probe: int, argument: int) -> float:
     """Return one numeric, read-only runtime probe for browser acceptance."""
 
-    from Infernux.input import Input
+    from infernux.input import Input
 
     if probe == 0:
         return float(Input.get_key(int(argument)))
@@ -1276,7 +1276,7 @@ def infernux_web_runtime_diagnostic(probe: int, argument: int) -> float:
     if probe == 12:
         return float(counters.get("native_fixed_callbacks", 0))
     if probe in (13, 14):
-        from Infernux.compute import statistics
+        from infernux.compute import statistics
 
         compute = statistics()
         if probe == 13:
@@ -1412,14 +1412,14 @@ def _submit_screen_ui() -> None:
     ):
         return
 
-    from Infernux.engine.runtime_screen_ui import (
+    from infernux.engine.runtime_screen_ui import (
         RuntimeScreenUISubmission, _collect_world_ui_elements,
     )
-    from Infernux.engine.ui.runtime_canvas_snapshot import (
+    from infernux.engine.ui.runtime_canvas_snapshot import (
         collect_sorted_runtime_canvas_snapshot,
     )
-    from Infernux.ui.enums import RenderMode
-    from Infernux.ui.ui_render_dispatch import runtime_ui_revision
+    from infernux.ui.enums import RenderMode
+    from infernux.ui.ui_render_dispatch import runtime_ui_revision
 
     scene = _player_scene_manager.get_active_scene()
     persistent_scene = _player_scene_manager.get_runtime_persistent_scene()
@@ -1499,13 +1499,13 @@ def _process_screen_ui_events(delta_time: float) -> None:
     ):
         return
 
-    from Infernux.engine.runtime_screen_ui import (
+    from infernux.engine.runtime_screen_ui import (
         collect_runtime_ui_input_surfaces, map_runtime_ui_pointer,
         map_runtime_ui_pointers,
     )
-    from Infernux.input import Input, TouchPhase
-    from Infernux.ui.ui_event_data import PointerType
-    from Infernux.ui.ui_event_system import UIPointerFrame
+    from infernux.input import Input, TouchPhase
+    from infernux.ui.ui_event_data import PointerType
+    from infernux.ui.ui_event_system import UIPointerFrame
 
     scene = _player_scene_manager.get_active_scene()
     scene_token = (
@@ -1644,7 +1644,7 @@ def infernux_web_tick(delta_time: float) -> bool:
     _process_screen_ui_events(delta_time)
     # UI listeners may replace scenes. Dispatch after hit-test traversal and
     # before collecting the next render submission, matching desktop ownership.
-    from Infernux.engine.runtime_event_queue import drain
+    from infernux.engine.runtime_event_queue import drain
 
     drain()
     _submit_screen_ui()

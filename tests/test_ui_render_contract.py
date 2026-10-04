@@ -79,7 +79,7 @@ def test_text_preparation_publishes_font_atlas_before_ui_geometry():
 
 def test_text_preparation_remeasures_cached_layouts_before_ui_geometry():
     runtime = (
-        ROOT.parents[2] / "python" / "Infernux" / "engine"
+        ROOT.parents[2] / "python" / "infernux" / "engine"
         / "runtime_screen_ui.py"
     ).read_text(encoding="utf-8")
     preparation = runtime.split("def prepare_text_layouts", 1)[1].split(
@@ -92,7 +92,7 @@ def test_text_preparation_remeasures_cached_layouts_before_ui_geometry():
 
 def test_button_labels_join_text_atlas_preparation():
     button = (
-        ROOT.parents[2] / "python" / "Infernux" / "ui" / "ui_button.py"
+        ROOT.parents[2] / "python" / "infernux" / "ui" / "ui_button.py"
     ).read_text(encoding="utf-8")
 
     preparation = button.split("def prepare_text_layout", 1)[1].split(
