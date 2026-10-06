@@ -1420,16 +1420,12 @@ def _submit_screen_ui() -> None:
     )
     from infernux.ui.enums import RenderMode
     from infernux.ui.ui_render_dispatch import runtime_ui_revision
+    from infernux.ui.ui_canvas_utils import runtime_ui_scenes
 
     scene = _player_scene_manager.get_active_scene()
-    persistent_scene = _player_scene_manager.get_runtime_persistent_scene()
-    if scene is None:
-        canvases = ()
-    else:
-        canvases = tuple(
-            collect_sorted_runtime_canvas_snapshot(scene, persistent_scene)
-        )
-    world_elements = _collect_world_ui_elements(scene, persistent_scene)
+    scenes = runtime_ui_scenes(_player_scene_manager)
+    canvases = tuple(collect_sorted_runtime_canvas_snapshot(*scenes))
+    world_elements = _collect_world_ui_elements(*scenes)
     global _screen_ui_snapshot_diagnostic
     snapshot_diagnostic = (
         id(scene), int(getattr(scene, "world_id", 0)),
@@ -1463,7 +1459,7 @@ def _submit_screen_ui() -> None:
         _screen_height,
         _screen_ui_texture_cache.generation,
         world_elements,
-        persistent_scene,
+        None, scenes,
     )
     if not _screen_ui_texture_cache.has_pending and _screen_ui_renderer.begin_frame_cached(
         _screen_width, _screen_height, revision
@@ -1506,6 +1502,7 @@ def _process_screen_ui_events(delta_time: float) -> None:
     from infernux.input import Input, TouchPhase
     from infernux.ui.ui_event_data import PointerType
     from infernux.ui.ui_event_system import UIPointerFrame
+    from infernux.ui.ui_canvas_utils import runtime_ui_scenes
 
     scene = _player_scene_manager.get_active_scene()
     scene_token = (
@@ -1515,12 +1512,8 @@ def _process_screen_ui_events(delta_time: float) -> None:
         _screen_ui_event_processor.discard()
         _mouse_event_dispatcher.discard()
         _input_scene_token = scene_token
-    if scene is None:
-        return
-
-    persistent_scene = _player_scene_manager.get_runtime_persistent_scene()
-    surfaces = collect_runtime_ui_input_surfaces(scene, persistent_scene)
-    camera = scene.effective_game_camera
+    surfaces = collect_runtime_ui_input_surfaces(*runtime_ui_scenes(_player_scene_manager))
+    camera = scene.effective_game_camera if scene is not None else None
     mouse_frame = Input.get_game_mouse_frame_state(0)
     mouse_x, mouse_y, scroll_x, scroll_y, held, down, up = mouse_frame
     if not surfaces:
