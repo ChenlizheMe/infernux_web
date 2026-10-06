@@ -12,6 +12,7 @@ import py_compile
 import re
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -366,7 +367,21 @@ def _publish_web_player(
     output_root = Path(request.output_dir).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     staged: dict[str, Path] = {}
+    template_output = output_root / "web-template"
+    workspace = Path(tempfile.mkdtemp(prefix=".web-template.", dir=output_root))
+    template_next = workspace / "next"
+    template_previous = workspace / "previous"
+    template_backed_up = False
+    template_installed = False
+    retain_workspace = False
+    template_files: list[Path] = []
     try:
+        if template_output.is_symlink() or os.path.isjunction(template_output):
+            raise RuntimeError("Published Web template cannot be a link or junction")
+        if template_output.exists() and not template_output.is_dir():
+            raise RuntimeError("Published Web template must be a directory")
+        if project_web_template is not None:
+            template_files = _stage_project_web_template(project_web_template, template_next)
         # Copy the complete generation without touching the currently served
         # one. Versioned resources are committed first and HTML is the final
         # atomic switch; a failed copy/replace leaves the old entry point and
@@ -376,14 +391,51 @@ def _publish_web_player(
             temporary = output_root / f".{name}.{os.getpid()}.{time.time_ns()}.tmp"
             staged[name] = temporary
             shutil.copy2(source, temporary)
+        artifacts = [
+            BuildArtifact(str(output_root / name), (output_root / name).suffix.lstrip("."),
+                          size=staged[name].stat().st_size)
+            for name in names
+        ]
+        artifacts.extend(
+            BuildArtifact(str(template_output / relative), relative.suffix.lstrip(".") or "file",
+                          size=(template_next / relative).stat().st_size)
+            for relative in template_files
+        )
         for name in names[1:]:
             os.replace(staged[name], output_root / name)
             del staged[name]
+        # The fixed template URL belongs to the entry point. Keep its previous
+        # directory until the HTML switch succeeds, including template removal.
+        if template_output.exists():
+            os.replace(template_output, template_previous)
+            template_backed_up = True
+            retain_workspace = True
+        if project_web_template is not None:
+            os.replace(template_next, template_output)
+            template_installed = True
         os.replace(staged[names[0]], output_root / names[0])
         del staged[names[0]]
+        retain_workspace = False
+    except BaseException:
+        try:
+            if template_installed:
+                shutil.rmtree(template_output)
+            if template_backed_up:
+                os.replace(template_previous, template_output)
+        except OSError as restore_error:
+            # A failed rollback must retain the previous complete template for
+            # recovery. Never let temporary-directory cleanup destroy it.
+            retain_workspace = True
+            raise RuntimeError(
+                f"Web publication rollback failed; retained template workspace: {workspace}"
+            ) from restore_error
+        retain_workspace = False
+        raise
     finally:
         for temporary in staged.values():
             temporary.unlink(missing_ok=True)
+        if not retain_workspace:
+            shutil.rmtree(workspace)
 
     # Retire old revisions only after the new HTML points at a complete
     # generation. Never delete rollback resources before the entry switch.
@@ -391,51 +443,41 @@ def _publish_web_player(
         if stale.is_file() and stale.name not in names:
             stale.unlink()
 
-    artifacts = [
-        BuildArtifact(
-            str(output_root / name),
-            (output_root / name).suffix.lstrip("."),
-            size=(output_root / name).stat().st_size,
-        )
-        for name in names
-    ]
-    template_output = output_root / "web-template"
-    template_temporary = output_root / ".web-template.tmp"
-    if template_temporary.exists():
-        shutil.rmtree(template_temporary)
-    if project_web_template is not None:
-        template_temporary.mkdir(parents=True)
-        for source in sorted(project_web_template.rglob("*")):
-            if source.is_symlink():
-                raise RuntimeError(
-                    f"Project Web template cannot contain symbolic links: {source}"
-                )
-            if not source.is_file():
-                continue
-            relative = source.relative_to(project_web_template)
-            if relative == Path("shell.html"):
-                continue
-            destination = template_temporary / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-        if template_output.exists():
-            shutil.rmtree(template_output)
-        os.replace(template_temporary, template_output)
-        for destination in sorted(template_output.rglob("*")):
-            if not destination.is_file():
-                continue
-            artifacts.append(
-                BuildArtifact(
-                    str(destination),
-                    destination.suffix.lstrip(".") or "file",
-                    size=destination.stat().st_size,
-                )
-            )
-    elif template_output.exists():
-        shutil.rmtree(template_output)
     request.report("package", 1, 1, "Web Player package published")
     request.report("audit", 1, 1, "Web Player browser contract verified")
     return tuple(artifacts), revision
+
+
+def _stage_project_web_template(source_root: Path, destination_root: Path) -> list[Path]:
+    if source_root.is_symlink() or os.path.isjunction(source_root):
+        raise RuntimeError("Project Web template cannot be a link or junction")
+    if not source_root.is_dir():
+        raise RuntimeError("Project Web template must be a directory")
+    destination_root.mkdir()
+    files: list[Path] = []
+    def reject_walk_error(error: OSError) -> None:
+        raise error
+
+    for directory, subdirectories, filenames in os.walk(
+        source_root, followlinks=False, onerror=reject_walk_error,
+    ):
+        subdirectories.sort()
+        for name in [*subdirectories, *sorted(filenames)]:
+            source = Path(directory) / name
+            if source.is_symlink() or os.path.isjunction(source):
+                raise RuntimeError(f"Project Web template cannot contain links or junctions: {source}")
+        for name in sorted(filenames):
+            source = Path(directory) / name
+            relative = source.relative_to(source_root)
+            if relative == Path("shell.html"):
+                continue
+            if not source.is_file():
+                raise RuntimeError(f"Project Web template source is not a regular file: {source}")
+            destination = destination_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            files.append(relative)
+    return sorted(files)
 
 
 def _resolve_web_template(
@@ -443,6 +485,8 @@ def _resolve_web_template(
     default_shell: Path,
 ) -> tuple[Path, Path | None]:
     template_root = Path(request.project_root).resolve() / _PROJECT_WEB_TEMPLATE
+    if template_root.is_symlink() or os.path.isjunction(template_root):
+        raise ValueError("Project Web template cannot be a link or junction")
     if not template_root.exists():
         return default_shell.resolve(), None
     if not template_root.is_dir():
