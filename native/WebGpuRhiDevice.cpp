@@ -1126,7 +1126,8 @@ bool WebGpuRhiDevice::UpdateBuffer(void *raw, rhi::BufferHandle destination, uin
 {
     auto &context = *static_cast<WebGpuTransferCommandContext *>(raw);
     const auto *target = context.device ? context.device->Resolve(context.device->m_buffers, destination) : nullptr;
-    if (!context.encoder || !target || offset > target->byteSize || byteSize > target->byteSize - offset)
+    if (!context.encoder || !target || byteSize > std::numeric_limits<size_t>::max() ||
+        offset > target->byteSize || byteSize > target->byteSize - offset)
         return false;
     wgpu::BufferDescriptor desc;
     desc.size = byteSize;
