@@ -50,6 +50,8 @@ class ReleaseTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1]
         shutil.copytree(source / "package", self.root / "package",
                         ignore=shutil.ignore_patterns("player", "tools", "__pycache__"))
+        self.metadata = json.loads((self.root / "package/inx_package.json").read_text(encoding="utf-8"))
+        self.tag = f"v{self.metadata['version']}"
         self.payload = self.root / "package/editor/infernux_web"
         player = self.root / "player-output"
         player.mkdir()
@@ -78,7 +80,7 @@ class ReleaseTests(unittest.TestCase):
         (self.tools / "linux-x64/tint").unlink()
         with self.assertRaises(FileNotFoundError):
             release.build_release(
-                "v0.2.1",
+                self.tag,
                 player_payload=self.player,
                 tools_payload=self.tools,
             )
@@ -88,17 +90,17 @@ class ReleaseTests(unittest.TestCase):
         (self.player / "infernux-runtime.wasm").write_bytes(b"not wasm")
         with self.assertRaisesRegex(ValueError, "WebAssembly"):
             release.build_release(
-                "v0.2.1",
+                self.tag,
                 player_payload=self.player,
                 tools_payload=self.tools,
             )
 
     def test_package_and_manifest(self):
         root = Path(__file__).resolve().parents[1]
-        source = json.loads((root / "package/inx_package.json").read_text(encoding="utf-8"))
+        source = self.metadata
         with tempfile.TemporaryDirectory() as temporary:
             artifact, manifest = release.build_release(
-                f"v{source['version']}",
+                self.tag,
                 Path(temporary),
                 player_payload=self.player,
                 tools_payload=self.tools,
