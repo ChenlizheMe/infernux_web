@@ -345,6 +345,8 @@ const rhi::TransferCommandEncoder::DispatchTable WebGpuRhiDevice::s_transferDisp
     &WebGpuRhiDevice::CopyBuffer,
     &WebGpuRhiDevice::CopyTexture,
     &WebGpuRhiDevice::ResolveTexture,
+    nullptr,
+    &WebGpuRhiDevice::UpdateBuffer,
 };
 
 WebGpuRhiDevice::WebGpuRhiDevice(wgpu::Device device, wgpu::Queue queue, uint32_t maxStorageBuffersPerStage)
@@ -1117,6 +1119,31 @@ void WebGpuRhiDevice::CopyBuffer(void *raw, rhi::BufferHandle source, rhi::Buffe
     if (src && dst)
         context.encoder.CopyBufferToBuffer(src->buffer, region.sourceOffset, dst->buffer, region.destinationOffset,
                                            region.byteSize);
+}
+
+bool WebGpuRhiDevice::UpdateBuffer(void *raw, rhi::BufferHandle destination, uint64_t offset, const void *data,
+                                  uint64_t byteSize)
+{
+    auto &context = *static_cast<WebGpuTransferCommandContext *>(raw);
+    const auto *target = context.device ? context.device->Resolve(context.device->m_buffers, destination) : nullptr;
+    if (!context.encoder || !target || offset > target->byteSize || byteSize > target->byteSize - offset)
+        return false;
+    wgpu::BufferDescriptor desc;
+    desc.size = byteSize;
+    desc.usage = wgpu::BufferUsage::CopySrc;
+    desc.mappedAtCreation = true;
+    const auto snapshot = context.device->m_device.CreateBuffer(&desc);
+    if (!snapshot)
+        return false;
+    void *mapped = snapshot.GetMappedRange(0, byteSize);
+    if (!mapped)
+        return false;
+    std::memcpy(mapped, data, static_cast<size_t>(byteSize));
+    snapshot.Unmap();
+    context.encoder.CopyBufferToBuffer(snapshot, 0, target->buffer, offset, byteSize);
+    // The encoded copy retains its own reference. Do not Destroy the buffer
+    // while that command may still execute.
+    return true;
 }
 
 void WebGpuRhiDevice::CopyTexture(void *raw, rhi::TextureHandle source, rhi::TextureHandle destination,
