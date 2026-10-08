@@ -97,6 +97,7 @@ PyObject *g_tick = nullptr;
 PyObject *g_input = nullptr;
 PyObject *g_activate = nullptr;
 PyObject *g_runtimeDiagnostic = nullptr;
+PyObject *g_renderSettingsUpdate = nullptr;
 uint32_t g_width = 1;
 uint32_t g_height = 1;
 double g_cssWidth = 1.0;
@@ -380,6 +381,34 @@ bool ReadRenderSettings(PyObject *settings, infernux::web::WebPostProcessRendere
     return true;
 }
 
+bool SynchronizeRenderSettings()
+{
+    PyObject *settings = PyObject_CallNoArgs(g_renderSettingsUpdate);
+    if (!settings) {
+        PrintPythonError("render-settings-update");
+        return false;
+    }
+    if (settings == Py_None) {
+        Py_DECREF(settings);
+        return true;
+    }
+    infernux::web::WebPostProcessRenderer::Settings values;
+    uint32_t sampleCount = 0;
+    const bool decoded = ReadRenderSettings(settings, values, sampleCount);
+    Py_DECREF(settings);
+    if (!decoded)
+        return false;
+    const auto particleSamples =
+        sampleCount == 4 ? infernux::rhi::SampleCount::Four : infernux::rhi::SampleCount::One;
+    // Reconfigure only sample-dependent attachments/pipelines. Reinitializing
+    // the renderers would discard particle simulation and persistent UI state.
+    return g_sceneRenderer.ConfigureSampleCount(sampleCount) &&
+           g_screenUIRenderer.ConfigureSampleCount(sampleCount) &&
+           g_particleRuntime.ConfigureSampleCount(particleSamples) &&
+           g_postProcessRenderer.ConfigureSampleCount(sampleCount) &&
+           g_postProcessRenderer.Configure(values);
+}
+
 void DispatchInput(const char *kind, PyObject *payload)
 {
     if (g_input == nullptr || payload == nullptr)
@@ -632,6 +661,8 @@ extern "C" EMSCRIPTEN_KEEPALIVE double InfernuxWebGetObjectPositionAxis(const ch
 
 extern "C" EMSCRIPTEN_KEEPALIVE double InfernuxWebGetRuntimeDiagnostic(int probe, int argument)
 {
+    if (probe == 15)
+        return static_cast<double>(g_postProcessRenderer.SceneSampleCount());
     if (g_runtimeDiagnostic == nullptr)
         return std::numeric_limits<double>::quiet_NaN();
     PyObject *result = PyObject_CallFunction(g_runtimeDiagnostic, "ii", probe, argument);
@@ -892,9 +923,11 @@ bool InitializePython()
     g_input = PyObject_GetAttrString(mainModule, "infernux_web_input");
     g_activate = PyObject_GetAttrString(mainModule, "infernux_web_activate");
     g_runtimeDiagnostic = PyObject_GetAttrString(mainModule, "infernux_web_runtime_diagnostic");
+    g_renderSettingsUpdate = PyObject_GetAttrString(mainModule, "infernux_web_render_settings_update");
     return g_tick != nullptr && PyCallable_Check(g_tick) && g_input != nullptr && PyCallable_Check(g_input) &&
            g_activate != nullptr && PyCallable_Check(g_activate) && g_runtimeDiagnostic != nullptr &&
-           PyCallable_Check(g_runtimeDiagnostic);
+           PyCallable_Check(g_runtimeDiagnostic) && g_renderSettingsUpdate != nullptr &&
+           PyCallable_Check(g_renderSettingsUpdate);
 }
 
 void Frame()
@@ -947,6 +980,11 @@ void Frame()
         }
     }
 #endif
+    if (!g_runtimeFrameFailed && !g_splashActive && !SynchronizeRenderSettings()) {
+        g_runtimeFrameFailed = true;
+        InfernuxWebAbortStartup("Live RenderStack configuration could not be applied");
+        return;
+    }
     wgpu::SurfaceTexture surfaceTexture;
     g_surface.GetCurrentTexture(&surfaceTexture);
     if (surfaceTexture.texture) {
@@ -971,8 +1009,12 @@ void Frame()
             depthAttachment.depthClearValue = 1.0f;
         }
         wgpu::CommandEncoder encoder = g_device.CreateCommandEncoder();
-        if (!g_splashActive && g_particleRuntimeReady && !g_webGpuValidationFailed)
-            g_particleRuntime.RecordCompute(encoder);
+        if (!g_splashActive && g_particleRuntimeReady && !g_webGpuValidationFailed &&
+            !g_particleRuntime.RecordCompute(encoder)) {
+            std::fprintf(stderr, "INFERNUX_WEB_PARTICLE_RECORDING_FAILED %s\n", g_particleRuntime.LastError().c_str());
+            InfernuxWebAbortStartup("Particle GPU frame could not be recorded");
+            return;
+        }
         const bool scenePrepared =
             !g_splashActive && !g_webGpuValidationFailed && g_sceneRenderer.Prepare(encoder, g_width, g_height);
         if (scenePrepared)
@@ -1040,6 +1082,8 @@ void Frame()
         presentPass.End();
         wgpu::CommandBuffer commands = encoder.Finish();
         g_queue.Submit(1, &commands);
+        if (g_particleRuntimeReady)
+            g_particleRuntime.NotifySubmission();
     }
 #if defined(INFERNUX_WEB_ENGINE_RUNTIME)
     if (pauseAcceptanceAfterRender) {

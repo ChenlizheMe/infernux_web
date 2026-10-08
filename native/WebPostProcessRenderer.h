@@ -33,6 +33,7 @@ class WebPostProcessRenderer final
 
     bool Initialize(wgpu::Device device, wgpu::TextureFormat surfaceFormat, uint32_t sceneSampleCount);
     bool Resize(uint32_t width, uint32_t height);
+    bool ConfigureSampleCount(uint32_t sampleCount);
     bool Configure(const Settings &settings);
     bool SetBloomEnabledForDiagnostics(bool enabled);
 
@@ -87,8 +88,10 @@ class WebPostProcessRenderer final
 
     bool CreatePipelines();
     bool CreateSceneTarget();
+    bool CreateMultisampledTarget();
     bool CreateBloomTargets();
     bool CreateResolveBindGroup();
+    void UpdateParameterBuffers();
     [[nodiscard]] bool BloomEnabled() const noexcept;
     bool RecordColorPass(wgpu::CommandEncoder encoder, wgpu::TextureView target, wgpu::RenderPipeline pipeline,
                          wgpu::BindGroup group);

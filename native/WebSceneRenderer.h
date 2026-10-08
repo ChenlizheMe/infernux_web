@@ -35,6 +35,7 @@ class WebSceneRenderer final
   public:
     bool Initialize(wgpu::Device device, wgpu::Queue queue, wgpu::TextureFormat colorFormat, uint32_t sceneSampleCount);
     void Resize(uint32_t width, uint32_t height);
+    bool ConfigureSampleCount(uint32_t sampleCount);
 
     [[nodiscard]] bool HasDepthTarget() const noexcept;
     [[nodiscard]] wgpu::TextureView GetDepthView() const noexcept;

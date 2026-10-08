@@ -44,6 +44,7 @@ _runtime_api_installed = False
 _player_root = "/infernux/player"
 _player_python = f"{_player_root}/python/site-packages"
 _runtime_data_root = ""
+_web_render_settings_state: Any = None
 _RUNTIME_ASSET_CATALOG_SCHEMA = "infernux.runtime_asset_catalog"
 _RUNTIME_ASSET_CATALOG_FIELDS = frozenset(
     {"$schema", "player_host", "packages", "artifacts"}
@@ -1041,11 +1042,8 @@ def infernux_web_ready(details: dict[str, Any]) -> None:
     return None
 
 
-def infernux_web_render_settings() -> dict[str, Any]:
-    """Return the active RenderStack subset implemented by the Web host."""
-
-    _prepare_player_asset_contract()
-    settings: dict[str, Any] = {
+def _default_web_render_settings() -> dict[str, Any]:
+    return {
         "msaa_samples": 4,
         "bloom_enabled": False,
         "bloom_threshold": 1.0,
@@ -1057,6 +1055,32 @@ def infernux_web_render_settings() -> dict[str, Any]:
         "tonemapping_mode": 0,
         "tonemapping_exposure": 1.0,
     }
+
+
+def _apply_web_render_effect(settings, feature_type, parameters) -> None:
+    if feature_type == "infernux.post.bloom":
+        settings["bloom_enabled"] = True
+        settings["bloom_threshold"] = float(parameters.get("threshold", 1.0))
+        settings["bloom_intensity"] = float(parameters.get("intensity", 0.8))
+        settings["bloom_scatter"] = float(parameters.get("scatter", 0.7))
+        settings["bloom_clamp"] = float(parameters.get("clamp", 65472.0))
+        settings["bloom_iterations"] = int(parameters.get("max_iterations", 5))
+        tint = parameters.get("tint", [1.0, 1.0, 1.0, 1.0])
+        if not isinstance(tint, (list, tuple)) or len(tint) < 3:
+            raise RuntimeError("Web Player Bloom tint must contain at least three values")
+        settings["bloom_tint"] = [float(tint[0]), float(tint[1]), float(tint[2])]
+    elif feature_type == "infernux.post.tonemapping":
+        settings["tonemapping_mode"] = int(parameters.get("mode", 2))
+        settings["tonemapping_exposure"] = float(parameters.get("exposure", 1.0))
+    else:
+        raise RuntimeError(f"Web Player does not implement render effect {feature_type!r}")
+
+
+def infernux_web_render_settings() -> dict[str, Any]:
+    """Return the active RenderStack subset implemented by the Web host."""
+
+    _prepare_player_asset_contract()
+    settings = _default_web_render_settings()
     stack = _web_render_stack_document()
     if stack is None:
         print(
@@ -1095,24 +1119,13 @@ def infernux_web_render_settings() -> dict[str, Any]:
         fields = slot.get("fields") if isinstance(slot, dict) else None
         if not isinstance(fields, dict) or not fields.get("enabled", False):
             continue
+        if fields.get("stage_id") != "final":
+            raise RuntimeError("Web Player implements only the final EffectStage")
         reference = fields.get("effect")
         if not isinstance(reference, dict):
             raise RuntimeError("Web Player enabled RenderStack slot has no effect reference")
         for feature_type, parameters in _iter_web_render_effects(reference):
-            if feature_type == "infernux.post.bloom":
-                settings["bloom_enabled"] = True
-                settings["bloom_threshold"] = float(parameters.get("threshold", 1.0))
-                settings["bloom_intensity"] = float(parameters.get("intensity", 0.8))
-                settings["bloom_scatter"] = float(parameters.get("scatter", 0.7))
-                settings["bloom_clamp"] = float(parameters.get("clamp", 65472.0))
-                settings["bloom_iterations"] = int(parameters.get("max_iterations", 5))
-                tint = parameters.get("tint", [1.0, 1.0, 1.0, 1.0])
-                if not isinstance(tint, (list, tuple)) or len(tint) < 3:
-                    raise RuntimeError("Web Player Bloom tint must contain at least three values")
-                settings["bloom_tint"] = [float(tint[0]), float(tint[1]), float(tint[2])]
-            elif feature_type == "infernux.post.tonemapping":
-                settings["tonemapping_mode"] = int(parameters.get("mode", 2))
-                settings["tonemapping_exposure"] = float(parameters.get("exposure", 1.0))
+            _apply_web_render_effect(settings, feature_type, parameters)
     print(
         "INFERNUX_WEB_RENDER_STACK_READY "
         "source=authored "
@@ -1122,6 +1135,94 @@ def infernux_web_render_settings() -> dict[str, Any]:
         f"tonemapping={settings['tonemapping_mode']}"
     )
     return settings
+
+
+class _WebRenderSettingsState:
+    """Track the live stack using slot identities and resource revisions.
+
+    The unchanged frame reads no files and copies no parameter documents.
+    Strong dependencies keep shared assets alive until the stack changes.
+    """
+
+    def __init__(self):
+        self._signature = None
+        self._dependencies = []
+        self._settings = None
+
+    @staticmethod
+    def _token(resource):
+        from infernux.renderstack.render_effect import EditableRenderEffectGroup, RenderEffect
+
+        if isinstance(resource, RenderEffect):
+            return resource.revision
+        if isinstance(resource, EditableRenderEffectGroup):
+            return resource.to_asset()
+        raise TypeError(f"Web Player expected a RenderEffect or group, received {type(resource).__name__}")
+
+    def _effects(self, resource, dependencies, overrides=None, trail=frozenset()):
+        from infernux.core.assets import AssetManager
+        from infernux.renderstack.render_effect import RenderEffect
+
+        if resource is None:
+            raise RuntimeError("Web Player could not resolve an enabled render effect")
+        identity = id(resource)
+        if identity in trail:
+            raise RuntimeError("Web Player render effect group cycle")
+        dependencies.append((resource, self._token(resource)))
+        if isinstance(resource, RenderEffect):
+            parameters = dict(resource.to_asset().parameters)
+            parameters.update(overrides or {})
+            yield resource.feature_type, parameters
+            return
+        for entry in resource.entries:
+            if entry.enabled:
+                child = AssetManager.load_by_guid(entry.asset.guid, asset_type=RenderEffect)
+                yield from self._effects(child, dependencies, entry.overrides, trail | {identity})
+
+    def update(self, stack):
+        slots = tuple(stack.effect_slots) if stack is not None else ()
+        samples = int(stack.pipeline.msaa_samples) if stack is not None else 4
+        if samples not in (1, 4):
+            raise RuntimeError(f"WebGPU supports RenderStack MSAA OFF or X4; received {samples!r}")
+        signature = (stack, samples, tuple(
+            (slot.stage_id, bool(slot.enabled), id(slot.effect_ref),
+             slot.effect_ref.guid if slot.effect_ref is not None else "", slot.effect_ref)
+            for slot in slots
+        ))
+        if signature == self._signature and all(
+            token == self._token(resource) for resource, token in self._dependencies
+        ):
+            return None
+        settings = _default_web_render_settings()
+        settings["msaa_samples"] = samples
+        dependencies = []
+        for slot in slots:
+            if not slot.enabled:
+                continue
+            if slot.stage_id != "final":
+                raise RuntimeError("Web Player implements only the final EffectStage")
+            for feature_type, parameters in self._effects(slot.effect, dependencies):
+                _apply_web_render_effect(settings, feature_type, parameters)
+        self._signature = signature
+        self._dependencies = dependencies
+        if settings == self._settings:
+            return None
+        self._settings = settings
+        return settings
+
+
+def infernux_web_render_settings_update() -> dict[str, Any] | None:
+    """Called after scene lifecycle dispatch, before any GPU frame encoding."""
+    global _web_render_settings_state
+    if _player_scene_manager is None:
+        return None
+    from infernux.renderstack.render_stack import RenderStack
+
+    if _web_render_settings_state is None:
+        _web_render_settings_state = _WebRenderSettingsState()
+    scene = _player_scene_manager.get_active_scene()
+    stack = RenderStack.instance(scene) if scene is not None else None
+    return _web_render_settings_state.update(stack)
 
 
 def _web_render_stack_document() -> dict[str, Any] | None:
@@ -1165,8 +1266,8 @@ def _iter_web_render_effects(
     )
     path = _web_render_effect_path(guid, path_hint)
     identity = guid.casefold()
-    if not path or identity in trail:
-        return
+    if identity in trail:
+        raise RuntimeError(f"Web Player render effect group cycle: {guid}")
     from infernux.core.asset_document import read_asset_document
 
     document = read_asset_document(path)

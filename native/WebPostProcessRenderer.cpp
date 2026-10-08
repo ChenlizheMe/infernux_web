@@ -282,6 +282,8 @@ bool WebPostProcessRenderer::Resize(uint32_t width, uint32_t height)
 
 bool WebPostProcessRenderer::Configure(const Settings &settings)
 {
+    const bool wasBloomEnabled = BloomEnabled();
+    const uint32_t previousIterations = m_settings.bloomIterations;
     m_settings = settings;
     m_settings.bloomThreshold = std::max(0.0f, settings.bloomThreshold);
     m_settings.bloomIntensity = std::max(0.0f, settings.bloomIntensity);
@@ -292,7 +294,20 @@ bool WebPostProcessRenderer::Configure(const Settings &settings)
     m_settings.exposure = std::max(0.0001f, settings.exposure);
     if (m_width == 0 || m_height == 0)
         return true;
-    return CreateBloomTargets() && CreateResolveBindGroup();
+    if (wasBloomEnabled != BloomEnabled() || previousIterations != m_settings.bloomIterations)
+        return CreateBloomTargets() && CreateResolveBindGroup();
+    UpdateParameterBuffers();
+    return true;
+}
+
+bool WebPostProcessRenderer::ConfigureSampleCount(uint32_t sampleCount)
+{
+    if (sampleCount != 1 && sampleCount != 4)
+        return false;
+    if (sampleCount == m_sceneSampleCount)
+        return true;
+    m_sceneSampleCount = sampleCount;
+    return m_width == 0 || m_height == 0 || CreateMultisampledTarget();
 }
 
 bool WebPostProcessRenderer::SetBloomEnabledForDiagnostics(bool enabled)
@@ -324,11 +339,21 @@ bool WebPostProcessRenderer::CreateSceneTarget()
     if (!m_sceneColorView)
         return false;
 
+    return CreateMultisampledTarget();
+}
+
+bool WebPostProcessRenderer::CreateMultisampledTarget()
+{
     m_sceneColorMultisampled = {};
     m_sceneColorMultisampledView = {};
     if (m_sceneSampleCount == 1)
         return true;
 
+    wgpu::TextureDescriptor descriptor;
+    descriptor.size = {m_width, m_height, 1};
+    descriptor.dimension = wgpu::TextureDimension::e2D;
+    descriptor.format = kHdrFormat;
+    descriptor.mipLevelCount = 1;
     descriptor.sampleCount = m_sceneSampleCount;
     descriptor.usage = wgpu::TextureUsage::RenderAttachment;
     m_sceneColorMultisampled = m_device.CreateTexture(&descriptor);
@@ -362,16 +387,6 @@ bool WebPostProcessRenderer::CreateBloomTargets()
         level.downParameters = UniformBuffer(m_device, sizeof(DownsampleParameters));
         if (!level.downView || !level.upView || !level.downParameters)
             return false;
-        const uint32_t sourceWidth = index == 0 ? m_width : m_bloomLevels[index - 1].width;
-        const uint32_t sourceHeight = index == 0 ? m_height : m_bloomLevels[index - 1].height;
-        DownsampleParameters values;
-        values.inverseWidth = 1.0f / static_cast<float>(sourceWidth);
-        values.inverseHeight = 1.0f / static_cast<float>(sourceHeight);
-        values.threshold = m_settings.bloomThreshold;
-        values.knee = 0.5f;
-        values.clampMax = m_settings.bloomClamp;
-        values.prefilter = index == 0 ? 1.0f : 0.0f;
-        m_device.GetQueue().WriteBuffer(level.downParameters, 0, &values, sizeof(values));
         std::array<wgpu::BindGroupEntry, 3> entries{};
         entries[0].binding = 0;
         entries[0].sampler = m_sampler;
@@ -393,11 +408,6 @@ bool WebPostProcessRenderer::CreateBloomTargets()
         auto &higher = m_bloomLevels[higherIndex];
         const auto &lower = m_bloomLevels[lowerIndex];
         higher.upParameters = UniformBuffer(m_device, sizeof(UpsampleParameters));
-        UpsampleParameters values;
-        values.inverseWidth = 1.0f / static_cast<float>(lower.width);
-        values.inverseHeight = 1.0f / static_cast<float>(lower.height);
-        values.scatter = m_settings.bloomScatter;
-        m_device.GetQueue().WriteBuffer(higher.upParameters, 0, &values, sizeof(values));
         std::array<wgpu::BindGroupEntry, 4> entries{};
         entries[0].binding = 0;
         entries[0].sampler = m_sampler;
@@ -424,11 +434,7 @@ bool WebPostProcessRenderer::CreateResolveBindGroup()
     const wgpu::TextureView bloom =
         m_bloomLevels.empty() ? m_sceneColorView
                               : (m_bloomLevels.size() == 1 ? m_bloomLevels[0].downView : m_bloomLevels[0].upView);
-    m_resolveValues.bloomIntensity = BloomEnabled() ? m_settings.bloomIntensity : 0.0f;
-    m_resolveValues.exposure = m_settings.exposure;
-    m_resolveValues.toneMappingMode = static_cast<float>(m_settings.toneMappingMode);
-    m_resolveValues.bloomTint = m_settings.bloomTint;
-    m_device.GetQueue().WriteBuffer(m_resolveParameters, 0, &m_resolveValues, sizeof(m_resolveValues));
+    UpdateParameterBuffers();
     std::array<wgpu::BindGroupEntry, 4> entries{};
     entries[0].binding = 0;
     entries[0].sampler = m_sampler;
@@ -445,6 +451,33 @@ bool WebPostProcessRenderer::CreateResolveBindGroup()
     group.entries = entries.data();
     m_resolveGroup = m_device.CreateBindGroup(&group);
     return static_cast<bool>(m_resolveGroup);
+}
+
+void WebPostProcessRenderer::UpdateParameterBuffers()
+{
+    for (size_t index = 0; index < m_bloomLevels.size(); ++index) {
+        const auto &level = m_bloomLevels[index];
+        DownsampleParameters down;
+        down.inverseWidth = 1.0f / static_cast<float>(index == 0 ? m_width : m_bloomLevels[index - 1].width);
+        down.inverseHeight = 1.0f / static_cast<float>(index == 0 ? m_height : m_bloomLevels[index - 1].height);
+        down.threshold = m_settings.bloomThreshold;
+        down.knee = 0.5f;
+        down.clampMax = m_settings.bloomClamp;
+        down.prefilter = index == 0 ? 1.0f : 0.0f;
+        m_device.GetQueue().WriteBuffer(level.downParameters, 0, &down, sizeof(down));
+        if (index + 1 < m_bloomLevels.size()) {
+            UpsampleParameters up;
+            up.inverseWidth = 1.0f / static_cast<float>(m_bloomLevels[index + 1].width);
+            up.inverseHeight = 1.0f / static_cast<float>(m_bloomLevels[index + 1].height);
+            up.scatter = m_settings.bloomScatter;
+            m_device.GetQueue().WriteBuffer(level.upParameters, 0, &up, sizeof(up));
+        }
+    }
+    m_resolveValues.bloomIntensity = BloomEnabled() ? m_settings.bloomIntensity : 0.0f;
+    m_resolveValues.exposure = m_settings.exposure;
+    m_resolveValues.toneMappingMode = static_cast<float>(m_settings.toneMappingMode);
+    m_resolveValues.bloomTint = m_settings.bloomTint;
+    m_device.GetQueue().WriteBuffer(m_resolveParameters, 0, &m_resolveValues, sizeof(m_resolveValues));
 }
 
 bool WebPostProcessRenderer::RecordColorPass(wgpu::CommandEncoder encoder, wgpu::TextureView target,

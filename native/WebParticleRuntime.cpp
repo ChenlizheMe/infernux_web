@@ -378,6 +378,7 @@ struct WebParticleRuntime::State
     wgpu::Queue queue;
     rhi::PixelFormat colorFormat = rhi::PixelFormat::Undefined;
     wgpu::RenderPipeline renderPipeline;
+    rhi::SampleCount renderSampleCount = rhi::SampleCount::One;
     wgpu::BindGroupLayout cameraLayout;
     wgpu::BindGroupLayout geometryLayout;
     wgpu::Buffer cameraBuffer;
@@ -511,6 +512,29 @@ bool WebParticleRuntime::Initialize(WebGpuRhiDevice &device, rhi::PixelFormat co
     geometryLayoutDesc.entries = geometryEntries.data();
     m_state->geometryLayout = m_state->device.CreateBindGroupLayout(&geometryLayoutDesc);
 
+    if (!m_state->cameraBuffer || !m_state->cameraLayout || !m_state->cameraGroup || !m_state->geometryLayout ||
+        !ConfigureSampleCount(sceneSampleCount)) {
+        m_state->error = "WebGPU failed to create the particle render pipeline";
+        Shutdown();
+        return false;
+    }
+    std::printf("INFERNUX_WEBGPU_PARTICLE_RUNTIME_READY\n");
+    m_state->reportedReady = true;
+    return true;
+}
+
+bool WebParticleRuntime::ConfigureSampleCount(rhi::SampleCount sceneSampleCount)
+{
+    if (!m_state->device || (sceneSampleCount != rhi::SampleCount::One && sceneSampleCount != rhi::SampleCount::Four))
+        return false;
+    if (!m_state->emissionSupported)
+        return true;
+    if (m_state->renderPipeline && m_state->renderSampleCount == sceneSampleCount)
+        return true;
+    // Keep emitter state, compute programs, buffers, and their bind groups.
+    // Only the raster pipeline depends on the scene's multisampling contract.
+    const auto colorFormat = m_state->colorFormat;
+
     wgpu::ShaderSourceWGSL shaderSource;
     shaderSource.code = kParticleShader;
     wgpu::ShaderModuleDescriptor shaderDesc;
@@ -550,15 +574,13 @@ bool WebParticleRuntime::Initialize(WebGpuRhiDevice &device, rhi::PixelFormat co
     pipelineDesc.primitive.cullMode = wgpu::CullMode::None;
     pipelineDesc.depthStencil = &depth;
     pipelineDesc.multisample.count = static_cast<uint32_t>(sceneSampleCount);
-    m_state->renderPipeline = m_state->device.CreateRenderPipeline(&pipelineDesc);
-    if (!m_state->cameraBuffer || !m_state->cameraLayout || !m_state->cameraGroup || !m_state->geometryLayout ||
-        !m_state->renderPipeline) {
+    const auto candidate = m_state->device.CreateRenderPipeline(&pipelineDesc);
+    if (!candidate) {
         m_state->error = "WebGPU failed to create the particle render pipeline";
-        Shutdown();
         return false;
     }
-    std::printf("INFERNUX_WEBGPU_PARTICLE_RUNTIME_READY\n");
-    m_state->reportedReady = true;
+    m_state->renderPipeline = candidate;
+    m_state->renderSampleCount = sceneSampleCount;
     return true;
 }
 
@@ -930,15 +952,15 @@ bool WebParticleRuntime::StateWasPreserved(uint64_t emitterId) const noexcept
     return found != m_state->emitters.end() && found->second->stateWasPreserved;
 }
 
-void WebParticleRuntime::RecordCompute(wgpu::CommandEncoder commandEncoder)
+bool WebParticleRuntime::RecordCompute(wgpu::CommandEncoder commandEncoder)
 {
     if (!m_state->emissionSupported || !m_state->rhi || !commandEncoder)
-        return;
+        return !m_state->emissionSupported;
     bool hasWork = false;
     for (const auto &[_, emitter] : m_state->emitters)
         hasWork = hasWork || !emitter->pending.empty() || emitter->resetPending;
     if (!hasWork)
-        return;
+        return true;
     const auto recordStage = [&](const auto &record) {
         wgpu::ComputePassDescriptor passDesc;
         auto pass = commandEncoder.BeginComputePass(&passDesc);
@@ -959,8 +981,15 @@ void WebParticleRuntime::RecordCompute(wgpu::CommandEncoder commandEncoder)
             continue;
         if (!currentEmitter->runtime->UpdateTransforms(currentEmitter->transforms)) {
             m_state->error = "WebGPU particle transform upload failed";
-            currentEmitter->pending.clear();
-            continue;
+            return false;
+        }
+        // Shared particle preparation records immutable upload snapshots.
+        // Publish them on this encoder before dispatch, as the Vulkan host does.
+        WebGpuTransferCommandContext transferContext;
+        const auto transfer = m_state->rhi->MakeTransferCommandEncoder(transferContext, commandEncoder);
+        if (!currentEmitter->runtime->RecordPendingUploads(transfer)) {
+            m_state->error = "WebGPU particle upload recording failed";
+            return false;
         }
         for (const FrameRequest &request : currentEmitter->pending) {
             if (currentEmitter->runtime->NeedsBootstrap() && !recordStage([&](const auto &commands) {
@@ -968,7 +997,7 @@ void WebParticleRuntime::RecordCompute(wgpu::CommandEncoder commandEncoder)
                                                                     currentEmitter->spawnGroup);
                 })) {
                 m_state->error = "WebGPU particle bootstrap recording failed";
-                break;
+                return false;
             }
             if (request.simulate && request.spawnCount > 0) {
                 if (!recordStage([&](const auto &commands) {
@@ -979,7 +1008,7 @@ void WebParticleRuntime::RecordCompute(wgpu::CommandEncoder commandEncoder)
                         return true;
                     })) {
                     m_state->error = "WebGPU particle initialization recording failed";
-                    break;
+                    return false;
                 }
             }
             if (request.simulate) {
@@ -994,7 +1023,7 @@ void WebParticleRuntime::RecordCompute(wgpu::CommandEncoder commandEncoder)
                                             });
                 if (!updateRecorded) {
                     m_state->error = "WebGPU particle simulation recording failed";
-                    break;
+                    return false;
                 }
                 currentEmitter->runtime->PublishAliveWrite();
                 if (request.render && !recordStage([&](const auto &commands) {
@@ -1002,7 +1031,7 @@ void WebParticleRuntime::RecordCompute(wgpu::CommandEncoder commandEncoder)
                             commands, request.systemSeed, request.simulationStep, currentEmitter->spawnGroup);
                     })) {
                     m_state->error = "WebGPU particle rendering export failed";
-                    break;
+                    return false;
                 }
             } else if (request.render) {
                 const bool resetRecorded = recordStage([&](const auto &commands) {
@@ -1015,13 +1044,20 @@ void WebParticleRuntime::RecordCompute(wgpu::CommandEncoder commandEncoder)
                     });
                 if (!renderingRecorded) {
                     m_state->error = "WebGPU particle rendering export failed";
-                    break;
+                    return false;
                 }
             }
             currentEmitter->drawReady = request.render;
         }
         currentEmitter->pending.clear();
     }
+    return true;
+}
+
+void WebParticleRuntime::NotifySubmission() noexcept
+{
+    for (const auto &[_, emitter] : m_state->emitters)
+        emitter->runtime->NotifySubmission(true);
 }
 
 bool WebParticleRuntime::Render(wgpu::RenderPassEncoder pass, uint32_t width, uint32_t height)

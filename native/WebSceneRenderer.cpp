@@ -1475,6 +1475,23 @@ bool WebSceneRenderer::CreatePipelines()
     return static_cast<bool>(m_skyPipeline);
 }
 
+bool WebSceneRenderer::ConfigureSampleCount(uint32_t sampleCount)
+{
+    if (sampleCount != 1 && sampleCount != 4)
+        return false;
+    if (sampleCount == m_sceneSampleCount)
+        return true;
+    m_sceneSampleCount = sampleCount;
+    if (!CreatePipelines())
+        return false;
+    m_depthTexture = {};
+    m_depthView = {};
+    if (m_depthWidth == 0 || m_depthHeight == 0)
+        return true;
+    Resize(m_depthWidth, m_depthHeight);
+    return HasDepthTarget();
+}
+
 void WebSceneRenderer::Resize(uint32_t width, uint32_t height)
 {
     width = std::max(1u, width);

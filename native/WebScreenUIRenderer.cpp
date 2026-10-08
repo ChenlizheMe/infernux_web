@@ -317,6 +317,17 @@ bool WebScreenUIRenderer::Initialize(wgpu::Device device, wgpu::Queue queue, wgp
     return m_fontTexture && m_fontView && m_fontSampler && CreatePipelineAndFontAtlas() && CreateWorldPipelines();
 }
 
+bool WebScreenUIRenderer::ConfigureSampleCount(uint32_t sampleCount)
+{
+    if (sampleCount != 1 && sampleCount != 4)
+        return false;
+    if (sampleCount == m_worldSampleCount)
+        return true;
+    m_worldSampleCount = sampleCount;
+    m_customWorldPipelines.clear();
+    return CreateWorldPipelines();
+}
+
 bool WebScreenUIRenderer::RefreshFontAtlas()
 {
     if (!m_fontAtlasDirty || !m_context || !m_device || !m_queue || !m_textureLayout)

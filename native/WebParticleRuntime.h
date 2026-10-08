@@ -27,6 +27,7 @@ class WebParticleRuntime final
 
     [[nodiscard]] bool Initialize(WebGpuRhiDevice &device, rhi::PixelFormat colorFormat,
                                   rhi::SampleCount sceneSampleCount);
+    [[nodiscard]] bool ConfigureSampleCount(rhi::SampleCount sceneSampleCount);
     void Shutdown() noexcept;
 
     [[nodiscard]] std::string ReplaceGraph(uint64_t graphInstanceId, PyObject *programs, PyObject *removeIds);
@@ -37,7 +38,8 @@ class WebParticleRuntime final
     [[nodiscard]] uint64_t ArtifactRevision(uint64_t emitterId) const noexcept;
     [[nodiscard]] bool StateWasPreserved(uint64_t emitterId) const noexcept;
 
-    void RecordCompute(wgpu::CommandEncoder encoder);
+    [[nodiscard]] bool RecordCompute(wgpu::CommandEncoder encoder);
+    void NotifySubmission() noexcept;
     [[nodiscard]] bool Render(wgpu::RenderPassEncoder pass, uint32_t width, uint32_t height);
 
     [[nodiscard]] const std::string &LastError() const noexcept;

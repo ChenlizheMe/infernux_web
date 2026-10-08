@@ -34,6 +34,7 @@ class WebScreenUIRenderer final
 
     bool Initialize(wgpu::Device device, wgpu::Queue queue, wgpu::TextureFormat colorFormat,
                     wgpu::TextureFormat worldColorFormat, uint32_t worldSampleCount);
+    bool ConfigureSampleCount(uint32_t sampleCount);
     void BeginFrame(uint32_t width, uint32_t height);
     bool BeginFrameCached(uint32_t width, uint32_t height, uint64_t contentRevision);
     void PushClipRect(int list, float minX, float minY, float maxX, float maxY);
