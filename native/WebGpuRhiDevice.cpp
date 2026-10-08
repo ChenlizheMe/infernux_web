@@ -439,9 +439,10 @@ void WebGpuRhiDevice::ReleaseSlot(std::vector<Slot<Payload>> &slots, uint32_t &f
         return;
     slot.payload = {};
     slot.occupied = false;
-    ++slot.generation;
-    if (slot.generation == 0)
-        slot.generation = 1;
+    if (!rhi::AdvanceHandleVersion(slot.generation)) {
+        slot.nextFree = UINT32_MAX;
+        return;
+    }
     slot.nextFree = freeHead;
     freeHead = handle.index;
 }

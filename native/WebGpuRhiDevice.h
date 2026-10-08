@@ -170,7 +170,7 @@ class WebGpuRhiDevice final : public rhi::Device
     template <typename Payload> struct Slot final
     {
         Payload payload{};
-        uint16_t generation = 1;
+        uint16_t generation = 1; // Zero permanently retires this slot.
         uint32_t nextFree = UINT32_MAX;
         bool occupied = false;
     };
