@@ -20,6 +20,7 @@
 #include "InfernuxWebHostModule.h"
 #include "WebFullscreenShaderContract.h"
 #include "WebGpuRhiDevice.h"
+#include "WebKeyboard.h"
 #include "WebParticleRuntime.h"
 #include "WebPostProcessRenderer.h"
 #include "WebSceneRenderer.h"
@@ -130,35 +131,6 @@ bool ConfigureAcceptanceClock()
     std::printf("INFERNUX_WEB_ACCEPTANCE_CLOCK_READY fixed_delta=%g pause_frame=%llu\n", fixedDelta,
                 static_cast<unsigned long long>(g_acceptancePauseAfterFrame));
     return true;
-}
-
-int BrowserCodeToScancode(std::string_view code)
-{
-    if (code.size() == 4 && code.substr(0, 3) == "Key" && code[3] >= 'A' && code[3] <= 'Z')
-        return 4 + (code[3] - 'A');
-    if (code.size() == 6 && code.substr(0, 5) == "Digit" && code[5] >= '1' && code[5] <= '9')
-        return 30 + (code[5] - '1');
-    if (code == "Digit0")
-        return 39;
-    if (code == "Enter")
-        return 40;
-    if (code == "Escape")
-        return 41;
-    if (code == "Backspace")
-        return 42;
-    if (code == "Tab")
-        return 43;
-    if (code == "Space")
-        return 44;
-    if (code == "ArrowRight")
-        return 79;
-    if (code == "ArrowLeft")
-        return 80;
-    if (code == "ArrowDown")
-        return 81;
-    if (code == "ArrowUp")
-        return 82;
-    return -1;
 }
 
 int BrowserButtonToUnityButton(unsigned short button)
@@ -604,7 +576,7 @@ EM_BOOL OnKey(int eventType, const EmscriptenKeyboardEvent *event, void *)
 {
     if (eventType == EMSCRIPTEN_EVENT_KEYDOWN && !event->repeat)
         InfernuxWebUserActivation();
-    infernux::InputManager::Instance().ProcessKeyEvent(BrowserCodeToScancode(event->code),
+    infernux::InputManager::Instance().ProcessKeyEvent(infernux::web::BrowserCodeToScancode(event->code),
                                                        eventType == EMSCRIPTEN_EVENT_KEYDOWN);
     PyObject *payload = PyDict_New();
     SetDictString(payload, "key", event->key);

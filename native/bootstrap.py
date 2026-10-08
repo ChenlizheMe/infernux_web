@@ -502,8 +502,15 @@ def _install_platform_runtime_api(native_module: Any) -> None:
     package.Debug = debug_module.Debug
 
     def runtime_attribute(name: str) -> Any:
-        if name in {"jit", "compute"}:
+        if name in {"jit", "compute", "components", "input", "lifecycle", "physics", "resources", "ui",
+                    "renderstack", "rendergraph"}:
             return importlib.import_module(f"infernux.{name}")
+        if name == "RenderStack":
+            value = importlib.import_module("infernux.renderstack").RenderStack
+            setattr(package, name, value)
+            return value
+        if name in {"warmup", "JIT_AVAILABLE"}:
+            return getattr(importlib.import_module("infernux.jit"), name)
         if name in {"buffer", "Buffer"}:
             compute_module = importlib.import_module("infernux.compute")
             value = getattr(compute_module, name)
@@ -516,6 +523,7 @@ def _install_platform_runtime_api(native_module: Any) -> None:
         sorted(
             {
                 "Debug",
+                "input", "physics", "resources", "ui", "components", "lifecycle",
                 *screen_module.__all__,
                 *getattr(math_module, "__all__", ()),
                 *components.__all__,
