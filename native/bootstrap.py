@@ -503,13 +503,13 @@ def _install_platform_runtime_api(native_module: Any) -> None:
 
     def runtime_attribute(name: str) -> Any:
         if name in {"jit", "compute"}:
-            return importlib.import_module(f"Infernux.{name}")
+            return importlib.import_module(f"infernux.{name}")
         if name in {"buffer", "Buffer"}:
             compute_module = importlib.import_module("infernux.compute")
             value = getattr(compute_module, name)
             setattr(package, name, value)
             return value
-        raise AttributeError(f"module 'Infernux' has no attribute {name!r}")
+        raise AttributeError(f"module 'infernux' has no attribute {name!r}")
 
     package.__getattr__ = runtime_attribute
     package.__all__ = tuple(
