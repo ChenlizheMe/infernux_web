@@ -155,10 +155,8 @@ def _prepare_cooked_player_content() -> str:
             json.loads(payload)
             scenes += 1
 
-    if scripts == 0 or scenes == 0:
-        raise RuntimeError(
-            "Web Player content must contain at least one compiled script and scene"
-        )
+    if scenes == 0:
+        raise RuntimeError("Web Player content must contain at least one scene")
     print(
         "INFERNUX_WEB_CONTENT_INDEX_READY "
         f"artifacts={len(catalog.get('artifacts', ()))} scripts={scripts} scenes={scenes} "
@@ -1081,16 +1079,18 @@ def infernux_web_render_settings() -> dict[str, Any]:
     default_parameters = parameter_document.get("__default__")
     if not isinstance(default_parameters, dict):
         raise RuntimeError("Web Player RenderStack parameters are missing the __default__ object")
-    serialized_msaa = default_parameters.get("msaa_samples")
-    if isinstance(serialized_msaa, dict):
-        serialized_msaa = serialized_msaa.get("__enum_name__")
-    sample_names = {"X1": 1, "X4": 4}
-    if serialized_msaa not in sample_names:
+    from infernux.components.fields import get_serialized_fields
+    from infernux.components.value_codec import VALUE_CODECS
+    from infernux.renderstack.forward_parameters import DefaultForwardParameters
+
+    msaa_field = get_serialized_fields(DefaultForwardParameters)["msaa_samples"]
+    samples = int(VALUE_CODECS.decode(default_parameters["msaa_samples"], msaa_field, "RenderStack.msaa_samples"))
+    if samples not in (1, 4):
         raise RuntimeError(
-            "WebGPU supports RenderStack MSAA X1 or X4; "
-            f"received {serialized_msaa!r}"
+            "WebGPU supports RenderStack MSAA OFF or X4; "
+            f"received {samples!r}"
         )
-    settings["msaa_samples"] = sample_names[serialized_msaa]
+    settings["msaa_samples"] = samples
     for slot in stack.get("effect_slots") or ():
         fields = slot.get("fields") if isinstance(slot, dict) else None
         if not isinstance(fields, dict) or not fields.get("enabled", False):
@@ -1167,8 +1167,9 @@ def _iter_web_render_effects(
     identity = guid.casefold()
     if not path or identity in trail:
         return
-    with open(path, encoding="utf-8") as stream:
-        document = json.load(stream)
+    from infernux.core.asset_document import read_asset_document
+
+    document = read_asset_document(path)
     if not isinstance(document, dict):
         raise RuntimeError(f"Web Player render effect is not an object: {path}")
     schema = document.get("$schema")
