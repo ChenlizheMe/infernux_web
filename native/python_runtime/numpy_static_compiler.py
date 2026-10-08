@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -31,6 +32,35 @@ def _output(arguments: list[str]) -> Path | None:
         if argument == "-o":
             return Path(arguments[index + 1]).resolve()
     return None
+
+
+def _legacy_random_defines(arguments: list[str]) -> list[str]:
+    """Keep RandomState's C-long distributions separate from Generator's int64 ABI.
+
+    NumPy normally puts these implementations in separate shared libraries.
+    Our single Wasm image must give the legacy translation units private names,
+    including functions whose pointers hide a different binomial_t layout.
+    """
+    if "-DNP_RANDOM_LEGACY=1" not in arguments:
+        return []
+    include_dirs = []
+    for index, argument in enumerate(arguments):
+        if argument == "-I" and index + 1 < len(arguments):
+            include_dirs.append(Path(arguments[index + 1]))
+        elif argument.startswith("-I") and len(argument) > 2:
+            include_dirs.append(Path(argument[2:]))
+    # Follow the compiler's declared include order, consuming the pinned NumPy
+    # header that this compile sees. Missing declarations are a build error.
+    header = next((directory / "numpy/random/distributions.h" for directory in include_dirs
+                   if (directory / "numpy/random/distributions.h").is_file()), None)
+    if header is None:
+        raise ValueError("Legacy NumPy static compilation has no distributions header")
+    symbols = set(re.findall(r"\b(random_[A-Za-z0-9_]+)\s*\(", header.read_text(encoding="utf-8")))
+    if "random_multinomial" not in symbols or "random_binomial_btpe" not in symbols:
+        raise ValueError("Legacy NumPy distributions header has an unsupported contract")
+    # NumPy 2.2.5 also defines this external helper without a header prototype.
+    symbols.add("random_geometric_inversion")
+    return [f"-D{symbol}=infernux_numpy_legacy_{symbol}" for symbol in sorted(symbols)]
 
 
 def _write_record(record_dir: Path, output: Path, arguments: list[str]) -> None:
@@ -74,7 +104,9 @@ def main() -> int:
         and output.name.endswith(".so")
     )
     if not is_extension_link:
-        return subprocess.run([str(options.driver), *arguments], check=False).returncode
+        return subprocess.run(
+            [str(options.driver), *arguments, *_legacy_random_defines(expanded)], check=False
+        ).returncode
 
     _write_record(options.record_dir.resolve(), output, expanded)
     objects = [item for item in expanded if item.endswith((".o", ".obj"))]

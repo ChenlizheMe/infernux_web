@@ -254,6 +254,7 @@ add_dependencies(InfernuxWebPlayerHost infernux_web_verify_python_runtime)
 target_include_directories(InfernuxWebPlayerHost PRIVATE
     "${INFERNUX_WEB_CPYTHON_SOURCE}/Include"
     "${INFERNUX_WEB_CPYTHON_BUILD}"
+    "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/external"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/external/dr_libs"
@@ -307,7 +308,7 @@ if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
             "The active Web build environment must provide pybind11 headers")
     endif()
     file(GLOB _web_binding_sources CONFIGURE_DEPENDS
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/*.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/*.cpp"
     )
     list(FILTER _web_binding_sources EXCLUDE REGEX "BindingInfernuxBootstrap\\.cpp$")
     set(_web_portable_binding_sources ${_web_binding_sources})
@@ -315,19 +316,19 @@ if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
     list(FILTER _web_portable_binding_sources EXCLUDE REGEX "BindingGUI\\.cpp$")
     list(FILTER _web_portable_binding_sources EXCLUDE REGEX "BindingRenderGraph\\.cpp$")
     set(_web_runtime_binding_sources
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingModule.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingAssetRegistry.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingBatch.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingAudio.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingInput.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingPhysics.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingResources.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingScene.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingSemanticCatalog.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingTagLayer.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingVector2f.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingVector3f.cpp"
-        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/tools/pybinding/BindingVector4f.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingModule.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingAssetRegistry.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingBatch.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingAudio.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingInput.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingPhysics.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingResources.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingScene.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingSemanticCatalog.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingTagLayer.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingVector2f.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingVector3f.cpp"
+        "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/bindings/python/BindingVector4f.cpp"
     )
 
     add_library(InfernuxWebNativeModuleProbe OBJECT EXCLUDE_FROM_ALL
@@ -378,6 +379,7 @@ if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
             "${_web_pybind11_include}"
             "${INFERNUX_WEB_CPYTHON_SOURCE}/Include"
             "${INFERNUX_WEB_CPYTHON_BUILD}"
+            "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp"
             "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux"
             "${INFERNUX_ENGINE_SOURCE_ROOT}/external"
             "${INFERNUX_ENGINE_SOURCE_ROOT}/external/assimp/include"
