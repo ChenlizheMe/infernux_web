@@ -357,6 +357,7 @@ WebGpuRhiDevice::WebGpuRhiDevice(wgpu::Device device, wgpu::Queue queue, uint32_
     m_capabilities.apiVersionMajor = 1;
     m_capabilities.limits.maxColorAttachments = 8;
     m_capabilities.limits.maxPushConstantBytes = 256;
+    m_capabilities.limits.maxBindingLayouts = 4;
     m_capabilities.limits.maxSampledTexturesPerStage = 16;
     m_capabilities.limits.maxStorageBuffersPerStage = maxStorageBuffersPerStage;
     m_capabilities.limits.maxSamplerAnisotropy = 16.0f;
