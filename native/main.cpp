@@ -63,6 +63,10 @@ EM_JS(int, InfernuxWebFixedCanvasWidth, (), {
 });
 
 EM_JS(int, InfernuxWebFixedCanvasHeight, (), { return Module.infernuxPresentation.height; });
+
+// Use the Emscripten terminal error path so the host's onAbort handler ends
+// loading, and startup cannot continue after a failed runtime contract.
+EM_JS(void, InfernuxWebAbortStartup, (const char *reason), { abort(UTF8ToString(reason)); });
 // clang-format on
 
 #if defined(INFERNUX_WEB_ENGINE_RUNTIME)
@@ -1050,8 +1054,10 @@ void Frame()
 
 void StartSurface()
 {
-    if (!ConfigureAcceptanceClock())
+    if (!ConfigureAcceptanceClock()) {
+        InfernuxWebAbortStartup("Invalid acceptance clock configuration");
         return;
+    }
     g_queue = g_device.GetQueue();
     wgpu::EmscriptenSurfaceSourceCanvasHTMLSelector canvasSource;
     canvasSource.selector = "#canvas";
@@ -1063,12 +1069,14 @@ void StartSurface()
     g_surface.GetCapabilities(g_adapter, &capabilities);
     if (capabilities.formatCount == 0) {
         std::fprintf(stderr, "INFERNUX_WEBGPU_NO_SURFACE_FORMAT\n");
+        InfernuxWebAbortStartup("WebGPU surface has no supported format");
         return;
     }
     g_surfaceFormat = capabilities.formats[0];
     if (!CreateRhiPipeline()) {
         std::fprintf(stderr, "INFERNUX_WEBGPU_RHI_PIPELINE_FAILED %s\n",
                      g_rhi ? g_rhi->LastError().c_str() : "unsupported surface format");
+        InfernuxWebAbortStartup("WebGPU render pipeline initialization failed");
         return;
     }
     PyObject *mainModule = PyImport_AddModule("__main__");
@@ -1077,6 +1085,7 @@ void StartSurface()
     Py_XDECREF(renderSettingsFunction);
     if (!renderSettings) {
         PrintPythonError("render-settings");
+        InfernuxWebAbortStartup("Render settings could not be loaded");
         return;
     }
     infernux::web::WebPostProcessRenderer::Settings postProcessSettings;
@@ -1084,6 +1093,7 @@ void StartSurface()
     if (!ReadRenderSettings(renderSettings, postProcessSettings, sceneSampleCount)) {
         Py_DECREF(renderSettings);
         std::fprintf(stderr, "INFERNUX_WEB_RENDER_STACK_CONFIGURATION_FAILED\n");
+        InfernuxWebAbortStartup("RenderStack configuration is invalid");
         return;
     }
     Py_DECREF(renderSettings);
@@ -1091,16 +1101,19 @@ void StartSurface()
     if (!g_postProcessRenderer.Initialize(g_device, g_surfaceFormat, sceneSampleCount) ||
         !g_postProcessRenderer.Configure(postProcessSettings)) {
         std::fprintf(stderr, "INFERNUX_WEB_POST_PROCESS_INITIALIZATION_FAILED\n");
+        InfernuxWebAbortStartup("Post-processing initialization failed");
         return;
     }
     const auto sceneColorFormat = g_postProcessRenderer.SceneColorFormat();
     if (!g_sceneRenderer.Initialize(g_device, g_queue, sceneColorFormat, sceneSampleCount)) {
         std::fprintf(stderr, "INFERNUX_WEBGPU_SCENE_PIPELINE_FAILED\n");
+        InfernuxWebAbortStartup("Scene rendering initialization failed");
         return;
     }
     if (!g_screenUIRenderer.Initialize(g_device, g_queue, g_surfaceFormat, sceneColorFormat,
                                        sceneSampleCount)) {
         std::fprintf(stderr, "INFERNUX_WEB_SCREEN_UI_INITIALIZATION_FAILED\n");
+        InfernuxWebAbortStartup("Screen UI initialization failed");
         return;
     }
     InfernuxWebSetScreenUIRenderer(&g_screenUIRenderer);
@@ -1108,6 +1121,7 @@ void StartSurface()
         sceneSampleCount == 4 ? infernux::rhi::SampleCount::Four : infernux::rhi::SampleCount::One;
     if (!g_particleRuntime.Initialize(*g_rhi, infernux::rhi::PixelFormat::RGBA16SFloat, particleSampleCount)) {
         std::fprintf(stderr, "INFERNUX_WEBGPU_PARTICLE_RUNTIME_FAILED %s\n", g_particleRuntime.LastError().c_str());
+        InfernuxWebAbortStartup("Particle runtime initialization failed");
         return;
     }
     g_particleRuntimeReady = true;
@@ -1129,6 +1143,7 @@ void StartSurface()
     if (ready == nullptr) {
         Py_DECREF(details);
         PrintPythonError("ready-contract");
+        InfernuxWebAbortStartup("Player startup callback is unavailable");
         return;
     }
     // Scene preparation crosses the Python/C++ boundary and may invoke the
@@ -1151,6 +1166,7 @@ void StartSurface()
     if (result == nullptr) {
         Py_DECREF(details);
         PrintPythonError("ready");
+        InfernuxWebAbortStartup("Player scene could not be loaded");
         return;
     }
     Py_DECREF(result);
@@ -1172,10 +1188,12 @@ int main()
         std::remove("/infernux-project.inxpkg");
     } catch (const std::exception &error) {
         std::fprintf(stderr, "INFERNUX_WEB_CONTENT_LOAD_FAILED %s\n", error.what());
+        InfernuxWebAbortStartup("Game content could not be loaded");
         return 1;
     }
     if (!InitializePython()) {
         std::fprintf(stderr, "INFERNUX_WEB_PYTHON_INITIALIZATION_FAILED\n");
+        InfernuxWebAbortStartup("Python runtime initialization failed");
         return 1;
     }
     wgpu::RequestAdapterOptions adapterOptions;
@@ -1188,6 +1206,7 @@ int main()
             if (status != wgpu::RequestAdapterStatus::Success) {
                 std::fprintf(stderr, "INFERNUX_WEBGPU_ADAPTER_FAILED %.*s\n", static_cast<int>(message.length),
                              message.data);
+                InfernuxWebAbortStartup("No compatible WebGPU adapter is available");
                 return;
             }
             g_adapter = std::move(adapter);
@@ -1230,6 +1249,7 @@ int main()
                     if (status != wgpu::RequestDeviceStatus::Success) {
                         std::fprintf(stderr, "INFERNUX_WEBGPU_DEVICE_FAILED %.*s\n", static_cast<int>(message.length),
                                      message.data);
+                        InfernuxWebAbortStartup("WebGPU device initialization failed");
                         return;
                     }
                     g_device = std::move(device);
