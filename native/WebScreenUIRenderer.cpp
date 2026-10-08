@@ -765,7 +765,9 @@ void WebScreenUIRenderer::SetMaterialBinding(int list, const std::string &guid, 
     // ImDrawList otherwise merges consecutive commands with the same texture
     // and scissor, which would mix two material generations into one draw.
     draw->AddCallback(CommandBoundary, nullptr);
-    m_bindingBoundaries[static_cast<size_t>(list)].push_back({draw->CmdBuffer.Size, next});
+    // AddCallback has already appended the empty draw command that receives
+    // the next geometry. Bind there, not at the command after that geometry.
+    m_bindingBoundaries[static_cast<size_t>(list)].push_back({draw->CmdBuffer.Size - 1, next});
     current = std::move(next);
 }
 

@@ -1176,13 +1176,13 @@ void main() {
             "source": "web_host.frag",
         },
     ]
-    _stage_web_ui_shader_sources(request, shader_root, shader_entries, native)
     particle_kernels: dict[str, dict[str, object]] = {}
     data_roots = sorted(player_assets.glob("*_Data"))
     if len(data_roots) != 1:
         raise ValueError(
             "Web Player shader cook requires exactly one staged *_Data directory"
         )
+    _stage_web_ui_shader_sources(data_roots[0], shader_root, shader_entries, native)
     # Particle AOT artifacts are build inputs, not loose Player files. The
     # generic cooker seals runtime content into Content.inxpkg before Web
     # shader translation runs, so consume the project's current artifact
@@ -1327,26 +1327,40 @@ void main() {
 
 
 def _stage_web_ui_shader_sources(
-    request: BuildRequest,
+    data_root: Path,
     shader_root: Path,
     shader_entries: list[dict[str, str]],
     native: object,
 ) -> None:
-    """Cook authored UI stages by asset GUID into the browser shader catalog.
+    """Translate exactly the UI shader/material closure sealed by content cook."""
+    from infernux.engine.player_package_native import read_entry
+    from infernux.engine.player_service_graph import PlayerRuntimeAssetCatalog
 
-    Meta file paths are deliberately ignored: the companion source file is
-    located inside this project's Assets tree, while the material's GUID is
-    the only identity used to select it.
-    """
+    catalog = json.loads(read_entry(data_root / "AssetCatalog.inxcat", "RuntimeAssetCatalog.json"))
+    records_artifacts = [
+        item for item in catalog["artifacts"]
+        if item["runtime_path"] == "Library/RuntimeAssetRecords.json"
+    ]
+    if len(records_artifacts) != 1:
+        raise ValueError("Web UI shader cook requires one sealed runtime asset index")
+    records_artifact = records_artifacts[0]
+    records = json.loads(read_entry(
+        data_root.parent / records_artifact["package"], records_artifact["runtime_path"],
+    ))
+    runtime = PlayerRuntimeAssetCatalog.from_documents(str(data_root), catalog, records)
+    entries = sorted(records["entries"], key=lambda item: item["guid"])
 
-    assets_root = Path(request.project_root).resolve() / "Assets"
-    shader_assets: dict[str, tuple[Path, str, str, bool]] = {}
-    for meta_path in sorted(assets_root.rglob("*.meta")):
-        source_path = meta_path.with_suffix("")
+    def payload(entry):
+        artifact = runtime.artifact(entry["primary_runtime_artifact_id"])
+        return read_entry(data_root.parent / artifact["package"], artifact["runtime_path"])
+
+    shader_assets = {}
+    for entry in entries:
+        source_path = Path(entry["runtime_path"])
         if source_path.suffix not in {".vert", ".frag"}:
             continue
-        metadata = json.loads(meta_path.read_text(encoding="utf-8"))["metadata"]
-        guid = str(metadata["guid"]["value"])
+        metadata = entry["metadata"]["metadata"]
+        guid = entry["guid"]
         capabilities = json.loads(metadata["shader_capabilities"]["value"])
         domains = set(capabilities) & {"ScreenUI", "WorldUI"}
         if domains:
@@ -1354,13 +1368,24 @@ def _stage_web_ui_shader_sources(
                 raise ValueError(f"UI shader has ambiguous domains: {guid}")
             has_properties = bool(json.loads(metadata["properties"]["value"]))
             shader_assets[guid] = (
-                source_path, str(metadata["shader_id"]["value"]), domains.pop(),
+                entry, str(metadata["shader_id"]["value"]), domains.pop(),
                 has_properties,
             )
 
     staged: dict[tuple[str, str], str] = {}
-    for material_path in sorted(assets_root.rglob("*.mat")):
-        material = json.loads(material_path.read_text(encoding="utf-8"))
+    for entry in entries:
+        material_path = Path(entry["runtime_path"])
+        if material_path.suffix != ".mat":
+            continue
+        material_artifact = runtime.artifact(entry["primary_runtime_artifact_id"])
+        material_payload = payload(entry)
+        # Imported project/package materials are cooked documents; built-in
+        # resources retain their authored format in the platform resource pack.
+        material = (
+            native._decode_asset_document(material_payload)
+            if Path(material_artifact["runtime_path"]).suffix == ".inxdoc"
+            else json.loads(material_payload)
+        )
         stages = material.get("shaders", {})
         if not isinstance(stages, dict):
             continue
@@ -1380,7 +1405,8 @@ def _stage_web_ui_shader_sources(
                 f"{material_path.name}"
             )
         for stage, reference, guid in zip(("vertex", "fragment"), stage_refs, shader_guids):
-            source_path, shader_id, _domain, _has_properties = shader_assets[guid]
+            shader_entry, shader_id, _domain, _has_properties = shader_assets[guid]
+            source_path = Path(shader_entry["runtime_path"])
             if source_path.suffix != (".vert" if stage == "vertex" else ".frag"):
                 raise ValueError(f"UI shader GUID has the wrong stage: {guid}")
             if shader_id != str(reference.get("shader_id", "")):
@@ -1393,7 +1419,7 @@ def _stage_web_ui_shader_sources(
                 continue
             source_name = f"ui-{guid}{source_path.suffix}"
             prepared = native._prepare_authored_shader_glsl(
-                source_path.read_text(encoding="utf-8"), str(source_path)
+                payload(shader_entry).decode("utf-8"), source_path.as_posix()
             )
             (shader_root / source_name).write_text(
                 prepared, encoding="utf-8", newline="\n"
