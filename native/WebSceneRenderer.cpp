@@ -1568,6 +1568,8 @@ bool WebSceneRenderer::BuildFrame(uint32_t width, uint32_t height)
         return false;
     }
 
+    const glm::vec4 background = inx::color::SrgbToLinear(camera->GetBackgroundColor());
+    m_clearColor = {background.r, background.g, background.b, background.a};
     camera->SetAspectRatio(static_cast<float>(width) / static_cast<float>(std::max(1u, height)));
     const size_t visibleCount = m_extractor.ExtractCameraFrame(m_world, camera);
     const auto frame = m_world.Acquire();

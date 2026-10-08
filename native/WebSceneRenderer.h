@@ -39,6 +39,9 @@ class WebSceneRenderer final
     [[nodiscard]] bool HasDepthTarget() const noexcept;
     [[nodiscard]] wgpu::TextureView GetDepthView() const noexcept;
 
+    /// Linear HDR clear color from the same camera used by Prepare().
+    [[nodiscard]] wgpu::Color GetClearColor() const noexcept { return m_clearColor; }
+
     /// Extract, upload, and record the directional shadow map before the main
     /// render pass begins.
     bool Prepare(wgpu::CommandEncoder encoder, uint32_t width, uint32_t height);
@@ -214,6 +217,7 @@ class WebSceneRenderer final
     std::vector<WebDrawRange> m_drawRanges;
     std::vector<WebDrawData> m_drawData;
     CameraData m_cameraData;
+    wgpu::Color m_clearColor{0.0, 0.0, 0.0, 1.0};
     std::string m_lastFrameIssue;
     size_t m_residentSceneCount = 0;
     size_t m_residentRendererCount = 0;

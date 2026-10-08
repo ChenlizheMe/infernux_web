@@ -958,7 +958,7 @@ void Frame()
         colorAttachment.loadOp = wgpu::LoadOp::Clear;
         colorAttachment.storeOp =
             g_postProcessRenderer.SceneSampleCount() > 1 ? wgpu::StoreOp::Discard : wgpu::StoreOp::Store;
-        colorAttachment.clearValue = {0.015, 0.035, 0.065, 1.0};
+        colorAttachment.clearValue = {0.0, 0.0, 0.0, 1.0};
         wgpu::RenderPassDescriptor passDescriptor;
         passDescriptor.colorAttachmentCount = 1;
         passDescriptor.colorAttachments = &colorAttachment;
@@ -975,6 +975,8 @@ void Frame()
             g_particleRuntime.RecordCompute(encoder);
         const bool scenePrepared =
             !g_splashActive && !g_webGpuValidationFailed && g_sceneRenderer.Prepare(encoder, g_width, g_height);
+        if (scenePrepared)
+            colorAttachment.clearValue = g_sceneRenderer.GetClearColor();
         if (g_sceneRenderer.HasDepthTarget())
             passDescriptor.depthStencilAttachment = &depthAttachment;
         wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&passDescriptor);
