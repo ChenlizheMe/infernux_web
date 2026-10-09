@@ -60,7 +60,11 @@ def test_browser_ui_input_uses_shared_world_projection():
     event_section = bootstrap.split("def _process_screen_ui_events", 1)[1].split(
         "def infernux_web_tick", 1
     )[0]
-    assert "collect_runtime_ui_input_surfaces(scene, persistent_scene)" in event_section
+    assert "runtime_ui_scenes(_player_scene_manager)" in event_section
+    assert (
+        "collect_runtime_ui_input_surfaces(*runtime_ui_scenes(_player_scene_manager))"
+        in event_section
+    )
     assert "map_runtime_ui_pointer(" in event_section
     assert "scene.effective_game_camera" in event_section
     assert "_screen_ui_event_processor.process_pointers(" in event_section

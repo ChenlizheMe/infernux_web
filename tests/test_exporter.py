@@ -226,6 +226,7 @@ def test_web_cook_executes_public_cpu_jit_source_without_a_jit_runtime(
             "import infernux as inx\n"
             "@inx.compute.kernel\n"
             "def update(domain):\n"
+            "    index = inx.compute.index(domain)\n"
             "    pass\n",
             "update",
         ),
@@ -240,6 +241,7 @@ def test_web_cook_executes_public_cpu_jit_source_without_a_jit_runtime(
             "from infernux import compute as gpu\n"
             "@gpu.kernel\n"
             "def integrate(domain):\n"
+            "    index = gpu.index(domain)\n"
             "    pass\n",
             "integrate",
         ),
@@ -361,6 +363,7 @@ def test_web_static_kernel_is_accepted_for_cpu_cook(tmp_path: Path) -> None:
         "    @staticmethod\n"
         "    @inx.compute.kernel\n"
         "    def step(domain):\n"
+        "        index = inx.compute.index(domain)\n"
         "        pass\n",
         encoding="utf-8",
     )
@@ -380,11 +383,11 @@ def test_web_compute_cook_vectorizes_work_items_and_atomics() -> None:
     )
 
     assert "@inx.compute._cpu_kernel" in cooked
-    assert "target[:]" in cooked
-    assert "inx.compute._cpu_atomic_add" in cooked
+    assert "target[:__inx_lane_" in cooked
+    assert "_inx_cpu_compute._cpu_atomic_add" in cooked
 
 
-def test_web_compute_cook_keeps_ordered_loop_kernel_sequential() -> None:
+def test_web_compute_cook_preserves_ordered_loop_and_vectorized_domain_lanes() -> None:
     cooked = build_cpu_compute_source(
         "import infernux as inx\n"
         "@inx.compute.kernel\n"
@@ -397,9 +400,9 @@ def test_web_compute_cook_keeps_ordered_loop_kernel_sequential() -> None:
     assert "@inx.compute._cpu_kernel" in cooked
     assert "for lane in range(3)" in cooked
     assert (
-        "inx.compute._cpu_atomic_add(output[:, lane], i, 1.0, "
-        "__inx_np.ones_like(i, dtype=__inx_np.bool_))"
-    ) in cooked
+        "_inx_cpu_compute._cpu_atomic_add(output[:, lane], __inx_lane_"
+        in cooked
+    )
 
 
 def test_web_kernel_contract_fixture_reports_implicit_receiver_with_identity(tmp_path: Path) -> None:
