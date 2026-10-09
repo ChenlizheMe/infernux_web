@@ -156,7 +156,7 @@ set(SDL_HIDAPI OFF CACHE BOOL "" FORCE)
 set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
 set(SDL_DIALOG OFF CACHE BOOL "" FORCE)
 add_subdirectory(
-    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/SDL"
+    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/sdl_for_infernux"
     "${CMAKE_BINARY_DIR}/_deps/infernux-web-sdl"
     EXCLUDE_FROM_ALL
 )
@@ -259,16 +259,16 @@ target_include_directories(InfernuxWebPlayerHost PRIVATE
     "${INFERNUX_ENGINE_SOURCE_ROOT}/external"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/external/dr_libs"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/external/glm"
-    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui"
+    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui_for_infernux"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/external/nlohmann/single_include"
-    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/SDL/include"
+    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/sdl_for_infernux/include"
     "${INFERNUX_ENGINE_SOURCE_ROOT}/external/stb"
 )
 target_sources(InfernuxWebPlayerHost PRIVATE
-    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui/imgui.cpp"
-    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui/imgui_draw.cpp"
-    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui/imgui_tables.cpp"
-    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui/imgui_widgets.cpp"
+    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui_for_infernux/imgui.cpp"
+    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui_for_infernux/imgui_draw.cpp"
+    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui_for_infernux/imgui_tables.cpp"
+    "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui_for_infernux/imgui_widgets.cpp"
 )
 target_link_libraries(InfernuxWebPlayerHost PRIVATE
     "-Wl,--start-group"
@@ -365,6 +365,14 @@ if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
     add_library(InfernuxWebResourceRuntimeProbe OBJECT EXCLUDE_FROM_ALL
         ${_web_resource_runtime_sources}
     )
+    add_subdirectory("${INFERNUX_ENGINE_SOURCE_ROOT}/external/svg"
+        "${CMAKE_CURRENT_BINARY_DIR}/svg" EXCLUDE_FROM_ALL)
+    if(INFERNUX_WEB_LINK_ENGINE_RUNTIME)
+        # The C rasterizer uses setjmp/longjmp. Its unwinder must match the
+        # native Wasm exception ABI used by the final Player and LunaSVG.
+        target_compile_options(plutovg PRIVATE "-sSUPPORT_LONGJMP=wasm")
+    endif()
+    target_link_libraries(InfernuxWebResourceRuntimeProbe PRIVATE lunasvg::lunasvg)
     add_library(InfernuxWebPlatformRuntimeProbe OBJECT EXCLUDE_FROM_ALL
         "${INFERNUX_ENGINE_SOURCE_ROOT}/cpp/infernux/platform/input/InputManager.cpp"
     )
@@ -385,10 +393,10 @@ if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
             "${INFERNUX_ENGINE_SOURCE_ROOT}/external/assimp/include"
             "${INFERNUX_ENGINE_SOURCE_ROOT}/external/glm"
             "${INFERNUX_ENGINE_SOURCE_ROOT}/external/glslang"
-            "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui"
-            "${INFERNUX_ENGINE_SOURCE_ROOT}/external/JoltPhysics"
+            "${INFERNUX_ENGINE_SOURCE_ROOT}/external/imgui_for_infernux"
+            "${INFERNUX_ENGINE_SOURCE_ROOT}/external/joltphysics_for_infernux"
             "${INFERNUX_ENGINE_SOURCE_ROOT}/external/nlohmann/single_include"
-            "${INFERNUX_ENGINE_SOURCE_ROOT}/external/SDL/include"
+            "${INFERNUX_ENGINE_SOURCE_ROOT}/external/sdl_for_infernux/include"
             "${INFERNUX_ENGINE_SOURCE_ROOT}/external/stb"
         )
         target_compile_definitions(${_web_binding_probe} PRIVATE
@@ -443,7 +451,7 @@ if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
         set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
         set(JPH_USE_CPU_COMPUTE ON CACHE BOOL "" FORCE)
         add_subdirectory(
-            "${INFERNUX_ENGINE_SOURCE_ROOT}/external/JoltPhysics/Build"
+            "${INFERNUX_ENGINE_SOURCE_ROOT}/external/joltphysics_for_infernux/Build"
             "${CMAKE_CURRENT_BINARY_DIR}/_deps/infernux-web-jolt"
             EXCLUDE_FROM_ALL
         )
@@ -473,7 +481,7 @@ if(INFERNUX_WEB_BUILD_NATIVE_MODULE_PROBE OR
         target_compile_definitions(InfernuxWebPlayerHost PRIVATE
             INFERNUX_WEB_ENGINE_RUNTIME=1
         )
-        target_link_libraries(InfernuxWebPlayerHost PRIVATE Jolt)
+        target_link_libraries(InfernuxWebPlayerHost PRIVATE Jolt lunasvg::lunasvg)
     endif()
 endif()
 
