@@ -2,7 +2,7 @@
 
 The official browser build plugin for [Infernux](https://github.com/ChenlizheMe/Infernux). It exports an Infernux game as WebAssembly, runs the engine's Python gameplay layer in the browser, and renders through WebGPU.
 
-[简体中文](README.zh-CN.md) · [Infernux Engine](https://github.com/ChenlizheMe/Infernux) · [Plugin Template](https://github.com/ChenlizheMe/infernux_plugin_template) · [Releases](https://github.com/ChenlizheMe/infernux_web/releases)
+[简体中文](README.zh-CN.md) · [Infernux Engine](https://github.com/ChenlizheMe/Infernux) · [Plugin Template](https://github.com/InfernuxEngine/infernux_plugin_template) · [Releases](https://github.com/InfernuxEngine/infernux_web/releases)
 
 ![Infernux Web export workflow](package/plugin_pages/media/overview.png)
 

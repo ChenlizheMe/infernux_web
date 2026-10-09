@@ -2,7 +2,7 @@
 
 这是 [Infernux](https://github.com/ChenlizheMe/Infernux) 游戏引擎的官方网页构建插件。它把游戏导出为 WebAssembly，让引擎的 Python 玩法层直接在浏览器中运行，并通过 WebGPU 完成渲染。
 
-[English](README.md) · [Infernux 引擎](https://github.com/ChenlizheMe/Infernux) · [插件模板](https://github.com/ChenlizheMe/infernux_plugin_template) · [发布制品](https://github.com/ChenlizheMe/infernux_web/releases)
+[English](README.md) · [Infernux 引擎](https://github.com/ChenlizheMe/Infernux) · [插件模板](https://github.com/InfernuxEngine/infernux_plugin_template) · [发布制品](https://github.com/InfernuxEngine/infernux_web/releases)
 
 ![Infernux Web 导出流程](package/plugin_pages/media/overview.png)
 
