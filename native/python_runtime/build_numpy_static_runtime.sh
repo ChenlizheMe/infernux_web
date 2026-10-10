@@ -153,6 +153,9 @@ PY
 export EM_CONFIG="$em_config"
 emcc --version | sed -n '1p' | grep -F " $EMSCRIPTEN_VERSION " >/dev/null
 [[ "$(ninja --version)" == "$NINJA_VERSION" ]]
+# CPython builds ports before compiling its first target source. Those ports
+# publish pkg-config files into the sysroot, including with an empty cache.
+embuilder build sysroot
 
 cpython="$sources/Python-${CPYTHON_VERSION}"
 printf '\n# Infernux Web is single-threaded.\nac_cv_func_pthread_kill=no\n' \
