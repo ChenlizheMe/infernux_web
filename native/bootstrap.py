@@ -182,22 +182,13 @@ def infernux_web_configure_physics() -> bool:
     physics_path = physics_settings.settings_path(_runtime_data_root)
     authored = os.path.isfile(physics_path)
     configuration = physics_settings.load(_runtime_data_root)
-    if authored:
-        configuration["max_fixed_delta_time"] = min(
-            float(configuration["max_fixed_delta_time"]),
-            float(configuration["fixed_delta_time"]) * 2.0,
-        )
-    else:
+    if not authored:
         # Desktop defaults reserve for very large simulations. A project that
         # needs those capacities can author PhysicsSettings explicitly; a Web
         # project with no file should not commit hundreds of MiB at startup.
-        # CPU-lowered Web compute uses one deterministic 30 Hz physics step per
-        # presented frame. This keeps simulation time real-time without the
-        # fixed-step catch-up spiral that otherwise repeats an expensive solver
-        # two or three times after a missed browser frame.
+        # Capacity limits are platform defaults; the simulation clock remains
+        # the shared engine default, independent of presentation frequency.
         configuration.update(
-            fixed_delta_time=1.0 / 30.0,
-            max_fixed_delta_time=1.0 / 30.0,
             temp_allocator_mb=32,
             max_jobs=1024,
             max_barriers=8,
@@ -1743,7 +1734,7 @@ def infernux_web_tick(delta_time: float) -> bool:
     _complete_pending_audio_activation()
     if not _player_activated:
         return False
-    _player_session.tick(max(0.0, min(float(delta_time), 0.25)))
+    _player_session.tick(float(delta_time))
     _process_screen_ui_events(delta_time)
     # UI listeners may replace scenes. Dispatch after hit-test traversal and
     # before collecting the next render submission, matching desktop ownership.

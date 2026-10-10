@@ -963,7 +963,9 @@ void Frame()
 #if defined(INFERNUX_WEB_ENGINE_RUNTIME)
     if (!g_runtimeFrameFailed && !g_acceptancePaused && !g_splashActive) {
         auto &sceneManager = infernux::SceneManager::Instance();
-        const float delta = static_cast<float>(std::clamp(deltaSeconds, 0.0, 0.25));
+        // SceneManager applies the project's maximum delta and time scale.
+        // A second browser-specific cap would change authored simulation time.
+        const float delta = static_cast<float>(deltaSeconds);
         sceneManager.Update(delta);
         sceneManager.LateUpdate(delta);
         sceneManager.EndFrame();
