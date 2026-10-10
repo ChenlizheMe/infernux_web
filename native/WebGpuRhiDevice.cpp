@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -342,26 +343,44 @@ const rhi::ComputeCommandEncoder::DispatchTable WebGpuRhiDevice::s_computeDispat
 };
 
 const rhi::TransferCommandEncoder::DispatchTable WebGpuRhiDevice::s_transferDispatch = {
-    &WebGpuRhiDevice::CopyBuffer,
-    &WebGpuRhiDevice::CopyTexture,
-    &WebGpuRhiDevice::ResolveTexture,
-    nullptr,
+    &WebGpuRhiDevice::CopyBuffer,   &WebGpuRhiDevice::CopyTexture, &WebGpuRhiDevice::ResolveTexture, nullptr,
     &WebGpuRhiDevice::UpdateBuffer,
 };
 
 WebGpuRhiDevice::WebGpuRhiDevice(wgpu::Device device, wgpu::Queue queue, uint32_t maxStorageBuffersPerStage)
     : m_deviceId(rhi::AllocateDeviceId()), m_device(std::move(device)), m_queue(std::move(queue))
 {
-    m_capabilities.backend = rhi::BackendType::WebGPU;
+    wgpu::Limits limits;
+    if (!m_device || !m_device.GetLimits(&limits))
+        throw std::runtime_error("WebGPU RHI requires the negotiated logical-device limits");
+    if (limits.maxStorageBuffersPerShaderStage != maxStorageBuffersPerStage)
+        throw std::runtime_error("WebGPU RHI storage-buffer limit differs from device negotiation");
+    m_capabilities.SetBackendId("webgpu");
     m_capabilities.SetAdapterName("WebGPU browser adapter");
     m_capabilities.apiVersionMajor = 1;
-    m_capabilities.limits.maxColorAttachments = 8;
+    m_capabilities.limits.maxTextureDimension1D = limits.maxTextureDimension1D;
+    m_capabilities.limits.maxTextureDimension2D = limits.maxTextureDimension2D;
+    m_capabilities.limits.maxTextureDimension3D = limits.maxTextureDimension3D;
+    m_capabilities.limits.maxTextureArrayLayers = limits.maxTextureArrayLayers;
+    m_capabilities.limits.maxColorAttachments = limits.maxColorAttachments;
+    // The plugin emulates push constants with an upload-backed uniform group.
     m_capabilities.limits.maxPushConstantBytes = 256;
-    m_capabilities.limits.maxBindingLayouts = 4;
-    m_capabilities.limits.maxSampledTexturesPerStage = 16;
-    m_capabilities.limits.maxStorageBuffersPerStage = maxStorageBuffersPerStage;
+    m_capabilities.limits.maxBindingLayouts = limits.maxBindGroups;
+    m_capabilities.limits.maxSampledTexturesPerStage = limits.maxSampledTexturesPerShaderStage;
+    m_capabilities.limits.maxStorageBuffersPerStage = limits.maxStorageBuffersPerShaderStage;
     m_capabilities.limits.maxSamplerAnisotropy = 16.0f;
-    m_capabilityState.dynamicRendering = {true, true};
+    auto &portable = m_capabilities.portable;
+    portable.storageTextures = limits.maxStorageTexturesPerShaderStage > 0;
+    portable.maxWorkgroupSize[0] = limits.maxComputeWorkgroupSizeX;
+    portable.maxWorkgroupSize[1] = limits.maxComputeWorkgroupSizeY;
+    portable.maxWorkgroupSize[2] = limits.maxComputeWorkgroupSizeZ;
+    portable.maxWorkgroupInvocations = limits.maxComputeInvocationsPerWorkgroup;
+    portable.maxStorageBufferBinding = limits.maxStorageBufferBindingSize;
+    std::copy_n(portable.maxWorkgroupSize, 3, m_capabilities.limits.maxComputeWorkgroupSize);
+    std::fill_n(m_capabilities.limits.maxComputeWorkgroupCount, 3, limits.maxComputeWorkgroupsPerDimension);
+    m_capabilities.limits.maxComputeWorkgroupInvocations = portable.maxWorkgroupInvocations;
+    // No synchronous readback, numeric extensions, external-memory export or
+    // bindless table is implemented by the browser adapter. Their caps stay false.
 
     for (size_t index = 1; index < rhi::kPixelFormatCount; ++index) {
         const auto format = static_cast<rhi::PixelFormat>(index);
@@ -398,11 +417,6 @@ rhi::DeviceId WebGpuRhiDevice::GetDeviceId() const noexcept
 const rhi::DeviceCaps &WebGpuRhiDevice::GetCapabilities() const noexcept
 {
     return m_capabilities;
-}
-
-const rhi::DeviceCapabilityState &WebGpuRhiDevice::GetCapabilityState() const noexcept
-{
-    return m_capabilityState;
 }
 
 std::shared_ptr<rhi::DeviceLifetime> WebGpuRhiDevice::GetLifetime() const noexcept
@@ -631,8 +645,8 @@ wgpu::BindGroupLayout WebGpuRhiDevice::CreateNativeBindingLayout(const rhi::Bind
             entry.buffer.type = wgpu::BufferBindingType::Uniform;
             break;
         case rhi::BindingType::StorageBuffer:
-            entry.buffer.type = source.readOnlyStorage ? wgpu::BufferBindingType::ReadOnlyStorage
-                                                       : wgpu::BufferBindingType::Storage;
+            entry.buffer.type =
+                source.readOnlyStorage ? wgpu::BufferBindingType::ReadOnlyStorage : wgpu::BufferBindingType::Storage;
             break;
         case rhi::BindingType::SampledTexture:
             entry.texture.sampleType =
@@ -1124,12 +1138,12 @@ void WebGpuRhiDevice::CopyBuffer(void *raw, rhi::BufferHandle source, rhi::Buffe
 }
 
 bool WebGpuRhiDevice::UpdateBuffer(void *raw, rhi::BufferHandle destination, uint64_t offset, const void *data,
-                                  uint64_t byteSize)
+                                   uint64_t byteSize)
 {
     auto &context = *static_cast<WebGpuTransferCommandContext *>(raw);
     const auto *target = context.device ? context.device->Resolve(context.device->m_buffers, destination) : nullptr;
-    if (!context.encoder || !target || byteSize > std::numeric_limits<size_t>::max() ||
-        offset > target->byteSize || byteSize > target->byteSize - offset)
+    if (!context.encoder || !target || byteSize > std::numeric_limits<size_t>::max() || offset > target->byteSize ||
+        byteSize > target->byteSize - offset)
         return false;
     wgpu::BufferDescriptor desc;
     desc.size = byteSize;

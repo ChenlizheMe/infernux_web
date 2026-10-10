@@ -61,7 +61,6 @@ class WebGpuRhiDevice final : public rhi::Device
 
     [[nodiscard]] rhi::DeviceId GetDeviceId() const noexcept override;
     [[nodiscard]] const rhi::DeviceCaps &GetCapabilities() const noexcept override;
-    [[nodiscard]] const rhi::DeviceCapabilityState &GetCapabilityState() const noexcept override;
     [[nodiscard]] std::shared_ptr<rhi::DeviceLifetime> GetLifetime() const noexcept override;
 
     [[nodiscard]] rhi::BufferHandle CreateBuffer(const rhi::BufferDesc &desc) override;
@@ -230,7 +229,6 @@ class WebGpuRhiDevice final : public rhi::Device
     wgpu::Device m_device;
     wgpu::Queue m_queue;
     rhi::DeviceCaps m_capabilities{};
-    rhi::DeviceCapabilityState m_capabilityState{};
     std::shared_ptr<rhi::DeviceLifetime> m_lifetime = std::make_shared<rhi::DeviceLifetime>();
     std::string m_lastError;
 
