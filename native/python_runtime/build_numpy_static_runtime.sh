@@ -40,13 +40,16 @@ if [[ -e "$root" ]]; then
     echo "Isolated build root must not already exist: $root" >&2
     exit 2
 fi
-for command in c++ curl git sha256sum; do
+for command in c++ curl git sha256sum /usr/bin/pkg-config; do
     command -v "$command" >/dev/null 2>&1 || { echo "Required command is unavailable: $command" >&2; exit 2; }
 done
 [[ -x "$host_python" ]] || { echo "Host Python is not executable" >&2; exit 2; }
 export MAKEFLAGS="-j2"
 export CMAKE_BUILD_PARALLEL_LEVEL="2"
 export PYTHONDONTWRITEBYTECODE="1"
+# Conda's pkg-config wrapper reintroduces host library directories even when
+# emconfigure sets PKG_CONFIG_LIBDIR. Use the system tool that honors it.
+export PKG_CONFIG=/usr/bin/pkg-config
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 plugin_root="$(cd "$script_dir/../.." && pwd)"
@@ -260,9 +263,10 @@ cpp = ['$host_python', '$compiler', '--driver', '$emsdk/upstream/emscripten/em++
 cython = '$cython'
 python = '$cross_python'
 exe_wrapper = '$node_path'
-pkgconfig = 'pkg-config'
+pkgconfig = '$PKG_CONFIG'
 
 [properties]
+pkg_config_libdir = ['$emsdk/upstream/emscripten/cache/sysroot/local/lib/pkgconfig', '$emsdk/upstream/emscripten/cache/sysroot/lib/pkgconfig']
 needs_exe_wrapper = true
 skip_sanity_check = true
 longdouble_format = 'IEEE_QUAD_LE'
